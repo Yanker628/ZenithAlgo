@@ -1,0 +1,77 @@
+symbol: "BTCUSDT"
+timeframe: "1h"
+
+mode: "paper" # 可选: "dry-run", "paper", "live-testnet", "live-mainnet"
+equity_base: 1000
+
+exchange:
+  name: "binance"
+  base_url: "https://api.binance.com"
+  ws_url: "wss://stream.binance.com:9443/ws"
+  api_key: "${BINANCE_API_KEY}"
+  api_secret: "${BINANCE_API_SECRET}"
+  allow_live: false # 安全保险丝，未显式允许则 live 阻断
+  symbols_allowlist: ["BTCUSDT"] # 允许交易的品种
+  min_notional: 5 # 美元最小名义，示例值，实际应从 exchangeInfo 获取
+  min_qty: 0.001 # 最小数量，示例值
+  qty_step: 0.0001 # 数量步进
+  price_step: 0.01 # 价格步进
+
+risk:
+  max_position_pct: 0.3
+  max_daily_loss_pct: 1
+strategy:
+  type: "simple_ma"
+  short_window: 7
+  long_window: 120
+  min_ma_diff: 0
+  cooldown_secs: 0
+
+backtest:
+  data_dir: "data/history"
+  symbol: "BTCUSDT"
+  # symbols: ["BTCUSDT", "ETHUSDT"] # ★ 新：多品种列表（可选）
+  interval: "1h"
+  start: "2021-01-01T00:00:00Z"
+  end: "2024-12-01T00:00:00Z"
+  initial_equity: 1000
+  auto_download: true
+  quiet_risk_logs: true
+  flatten_on_end: true
+
+  fees:
+    maker: 0.0002 # 0.02%
+    taker: 0.0004 # 0.04%
+    slippage_bp: 1.0 # basis points，1bp=0.01%
+
+  sizing:
+    position_pct: 0.2 # 总持仓不超过 20% 本金
+    trade_notional: 200 # 单笔最多 100 美元名义
+
+  strategy:
+    type: "simple_ma"
+    # 单一运行参数
+    short_window: 10
+    long_window: 50
+    min_ma_diff: 0.5
+    cooldown_secs: 60
+
+  # 参数搜索配置（V2.1 核心）
+  sweep:
+    enabled: true
+    mode: "grid"
+    min_trades: 10 # 过滤交易数过少的组合
+    max_drawdown: 1 # 回撤上限
+    min_sharpe: 0.0 # Sharpe 下限
+    low_trades_penalty: 1.0 # 交易数越少罚分越大，可按需调整
+    params:
+      short_window: [5, 7, 10, 12, 15, 18, 20]
+      long_window: [40, 60, 80, 100, 120, 150, 180]
+      min_ma_diff: [0.0, 0.5, 1.0]
+      cooldown_secs: [0, 60, 300]
+
+    # 评估指标权重（简单打分）
+    objective:
+      total_return_weight: 0.4
+      sharpe_weight: 0.4
+      max_drawdown_weight: -0.2 # 负号代表回撤越大越差

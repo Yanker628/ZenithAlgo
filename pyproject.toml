@@ -1,0 +1,20 @@
+[project]
+name = "zenithalgo"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "matplotlib>=3.10.8",
+    "pandas>=2.3.3",
+    "pytest>=9.0.2",
+    "PyYAML>=6.0",
+    "requests>=2.31",
+    "seaborn>=0.13.2",
+    "websockets>=11.0",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "live: mark a test as requiring live exchange/network",
+]

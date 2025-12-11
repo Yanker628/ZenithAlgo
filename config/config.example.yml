@@ -1,0 +1,17 @@
+symbol: "BTCUSDT"
+timeframe: "1h"
+
+mode: "dry-run" # 可选值: "live", "dry-run", "paper"
+equity_base: 100000  # 账户初始权益，用于估算日盈亏比例
+
+exchange:
+  name: "binance"
+  base_url: "https://api.binance.com"
+  ws_url: "wss://stream.binance.com:9443/ws"
+  api_key: "${BINANCE_API_KEY}"
+  api_secret: "${BINANCE_API_SECRET}"
+  # 现货 / 合约 / 模拟盘等设置可在此拓展
+
+risk:
+  max_position_pct: 0.3 # 单个品种最大仓位占权益比例
+  max_daily_loss_pct: 0.05 # 单日最大亏损 5%
