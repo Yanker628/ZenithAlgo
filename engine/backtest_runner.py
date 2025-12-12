@@ -17,8 +17,8 @@ from broker.backtest import BacktestBroker
 from market.models import OrderSignal, Tick
 from factors.registry import apply_factors, build_factors
 from risk.manager import RiskManager
-from strategy.simple_ma import SimpleMAStrategy
-from utils.config_loader import load_config
+from strategy.registry import build_strategy
+from utils.config_loader import load_config, StrategyConfig
 from utils.data_loader import HistoricalDataLoader
 from utils.logging import setup_logger
 from utils.pnl import compute_unrealized_pnl
@@ -96,6 +96,20 @@ def _export_trades_csv(trades: list[dict], path: Path) -> None:
     df = pd.DataFrame(rows)
     df.to_csv(path, index=False)
 
+def _resolve_strategy_param(bt_cfg: dict, cfg, key: str, default: Any = None) -> Any:
+    if isinstance(bt_cfg, dict) and key in bt_cfg and bt_cfg.get(key) is not None:
+        return bt_cfg.get(key)
+    strat = bt_cfg.get("strategy", {}) if isinstance(bt_cfg, dict) else {}
+    if isinstance(strat, dict) and key in strat and strat.get(key) is not None:
+        return strat.get(key)
+    try:
+        params = getattr(cfg, "strategy", None).params  # type: ignore[union-attr]
+    except Exception:
+        params = {}
+    if isinstance(params, dict) and key in params and params.get(key) is not None:
+        return params.get(key)
+    return default
+
 
 def run_backtest(
     cfg_path: str = "config/config.yml",
@@ -144,16 +158,8 @@ def run_backtest(
     # factors 配置：优先 backtest.factors；否则用 MA short/long 生成默认因子列
     factors_cfg = bt_cfg.get("factors")
     if not factors_cfg:
-        short_w = int(
-            bt_cfg.get("short_window")
-            or bt_cfg.get("strategy", {}).get("short_window")
-            or getattr(cfg.strategy, "short_window", 0)
-        )
-        long_w = int(
-            bt_cfg.get("long_window")
-            or bt_cfg.get("strategy", {}).get("long_window")
-            or getattr(cfg.strategy, "long_window", 0)
-        )
+        short_w = int(_resolve_strategy_param(bt_cfg, cfg, "short_window", 0) or 0)
+        long_w = int(_resolve_strategy_param(bt_cfg, cfg, "long_window", 0) or 0)
         factors_cfg = [
             {"name": "ma", "params": {"window": short_w, "price_col": "close", "out_col": short_feature}},
             {"name": "ma", "params": {"window": long_w, "price_col": "close", "out_col": long_feature}},
@@ -163,31 +169,25 @@ def run_backtest(
     base_cols = {"ts", "symbol", "open", "high", "low", "close", "volume"}
     feature_cols = [c for c in candles_df.columns if c not in base_cols]
 
-    strat = SimpleMAStrategy(
-        short_window=int(
-            bt_cfg.get("short_window")
-            or bt_cfg.get("strategy", {}).get("short_window")
-            or getattr(cfg.strategy, "short_window", 0)
-        ),
-        long_window=int(
-            bt_cfg.get("long_window")
-            or bt_cfg.get("strategy", {}).get("long_window")
-            or getattr(cfg.strategy, "long_window", 0)
-        ),
-        min_ma_diff=float(
-            bt_cfg.get("min_ma_diff")
-            or bt_cfg.get("strategy", {}).get("min_ma_diff", 0.0)
-            or getattr(cfg.strategy, "min_ma_diff", 0.0)
-        ),
-        cooldown_secs=int(
-            bt_cfg.get("cooldown_secs")
-            or bt_cfg.get("strategy", {}).get("cooldown_secs", 0)
-            or getattr(cfg.strategy, "cooldown_secs", 0)
-        ),
-        short_feature=short_feature,
-        long_feature=long_feature,
-        require_features=True,
-    )
+    # 策略配置：合并 top-level strategy 与 backtest.strategy，并兼容 sweep 直接写在 backtest 顶层的覆盖项
+    base_type = getattr(cfg, "strategy", None).type if getattr(cfg, "strategy", None) else "simple_ma"
+    base_params = dict(getattr(cfg, "strategy", None).params) if getattr(cfg, "strategy", None) else {}
+    bt_strategy_dict = bt_cfg.get("strategy", {}) if isinstance(bt_cfg, dict) else {}
+    bt_type = str(bt_strategy_dict.get("type") or base_type)
+    bt_params = dict(bt_strategy_dict) if isinstance(bt_strategy_dict, dict) else {}
+    bt_params.pop("type", None)
+
+    merged_params = {**base_params, **bt_params}
+    # sweep 兼容：允许 short_window/long_window/... 出现在 backtest 顶层
+    for k in ["short_window", "long_window", "min_ma_diff", "cooldown_secs"]:
+        v = _resolve_strategy_param(bt_cfg, cfg, k, None)
+        if v is not None:
+            merged_params[k] = v
+    merged_params.setdefault("short_feature", short_feature)
+    merged_params.setdefault("long_feature", long_feature)
+    merged_params["require_features"] = True
+
+    strat = build_strategy(StrategyConfig(type=bt_type, params=merged_params))
     suppress_risk_logs = bool(bt_cfg.get("quiet_risk_logs", True)) if isinstance(bt_cfg, dict) else False
     # 回测可在 backtest.risk 中覆盖风控参数（如调高 max_daily_loss_pct）
     risk_cfg = deepcopy(cfg.risk)

@@ -10,10 +10,9 @@ from broker.base import BrokerMode, Broker
 from broker.binance import BinanceBroker
 from broker.mock import MockBroker
 from market.client import BinanceMarketClient, FakeMarketClient
-from market.models import OrderSignal
 from risk.manager import RiskManager
-from strategy.simple_ma import SimpleMAStrategy
-from utils.config_loader import load_config, StrategyConfig
+from strategy.registry import build_strategy
+from utils.config_loader import load_config
 from utils.logging import setup_logger
 from utils.pnl import compute_unrealized_pnl
 from utils.sizer import resolve_sizing_cfg, size_signals
@@ -85,37 +84,6 @@ def create_market_client(cfg, logger):
     return FakeMarketClient(logger=logger)
 
 
-def create_strategy(strat_cfg: StrategyConfig | None) -> SimpleMAStrategy:
-    """创建策略实例（当前仅支持 simple_ma）。
-
-    Parameters
-    ----------
-    strat_cfg:
-        `StrategyConfig`，含 type 与 params；None 时使用默认参数。
-
-    Returns
-    -------
-    SimpleMAStrategy
-        初始化后的策略实例。
-
-    Raises
-    ------
-    ValueError
-        当策略 type 不受支持时抛出。
-    """
-    if strat_cfg is None:
-        return SimpleMAStrategy()
-    if strat_cfg.type != "simple_ma":
-        raise ValueError(f"Unsupported strategy type: {strat_cfg.type}")
-    params = strat_cfg.params or {}
-    return SimpleMAStrategy(
-        short_window=int(params.get("short_window", 5)),
-        long_window=int(params.get("long_window", 20)),
-        min_ma_diff=float(params.get("min_ma_diff", 0.0)),
-        cooldown_secs=int(params.get("cooldown_secs", 0)),
-    )
-
-
 def run_runner(
     cfg_path: str = "config/config.yml",
     cfg_obj=None,
@@ -141,7 +109,7 @@ def run_runner(
     cfg = cfg_obj or load_config(cfg_path)
 
     equity_base = cfg.equity_base or 10000
-    strat = create_strategy(getattr(cfg, "strategy", None))
+    strat = build_strategy(getattr(cfg, "strategy", None))
     risk = RiskManager(cfg.risk, equity_base=equity_base)
     trade_logger = TradeLogger()
     broker = create_broker(cfg, trade_logger)
