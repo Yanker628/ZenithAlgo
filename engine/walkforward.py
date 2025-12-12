@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Tuple
 from engine.backtest_runner import run_backtest, parse_iso
 from utils.best_params import pick_best_params
 from utils.config_loader import load_config
+from utils.metrics_canon import CANONICAL_METRIC_KEYS, canonicalize_metrics
 from utils.param_search import grid_search, random_search
 
 
@@ -149,19 +150,15 @@ def walk_forward(
                 "train": [train_start.isoformat(), train_end.isoformat()],
                 "test": [test_start.isoformat(), test_end.isoformat()],
                 "params": best_params,
-                "metrics": summary.get("metrics", {}),
+                "metrics": canonicalize_metrics(summary.get("metrics", {}) if isinstance(summary, dict) else {}),
                 "artifacts_dir": artifacts_dir,
             }
         )
-    # 汇总：简单取各段指标平均（可扩展为加权）
+    # 汇总：输出 canonical metrics（字段与 backtest/sweep 保持一致）
     if results["segments"]:
         segs = results["segments"]
         n = len(segs)
         returns = [float(seg["metrics"].get("total_return", 0.0) or 0.0) for seg in segs]
-        total_return_avg = sum(returns) / n if n else 0.0
-        sharpe_avg = sum(float(seg["metrics"].get("sharpe", 0.0) or 0.0) for seg in segs) / n if n else 0.0
-        max_drawdown_max = max(float(seg["metrics"].get("max_drawdown", 0.0) or 0.0) for seg in segs) if n else 0.0
-
         profitable_segments_ratio = (sum(1 for r in returns if r > 0) / n) if n else 0.0
         worst_segment_return = min(returns) if n else 0.0
         sorted_returns = sorted(returns)
@@ -172,13 +169,58 @@ def walk_forward(
         else:
             median_return = (sorted_returns[n // 2 - 1] + sorted_returns[n // 2]) / 2
 
+        def _wavg(key: str) -> float:
+            num = 0.0
+            den = 0.0
+            for seg in segs:
+                m = seg.get("metrics", {}) or {}
+                w = float(m.get("total_trades", 0) or 0)
+                v = float(m.get(key, 0.0) or 0.0)
+                num += v * w
+                den += w
+            return (num / den) if den > 0 else 0.0
+
+        def _avg(key: str) -> float:
+            return sum(float((seg.get("metrics", {}) or {}).get(key, 0.0) or 0.0) for seg in segs) / n if n else 0.0
+
+        def _max(key: str) -> float:
+            return max(float((seg.get("metrics", {}) or {}).get(key, 0.0) or 0.0) for seg in segs) if n else 0.0
+
+        total_trades_sum = sum(int((seg.get("metrics", {}) or {}).get("total_trades", 0) or 0) for seg in segs)
+        overall_metrics: dict[str, Any] = {
+            "total_return": _avg("total_return"),
+            "max_drawdown": _max("max_drawdown"),
+            "sharpe": _avg("sharpe"),
+            "win_rate": _wavg("win_rate"),
+            "avg_win": _wavg("avg_win"),
+            "avg_loss": _wavg("avg_loss"),
+            "total_trades": total_trades_sum,
+            "profit_factor": _avg("profit_factor"),
+            "expectancy": _wavg("expectancy"),
+            "avg_trade_return": _wavg("avg_trade_return"),
+            "std_trade_return": _avg("std_trade_return"),
+            "exposure": _avg("exposure"),
+            "turnover": _avg("turnover"),
+        }
+        overall_metrics = canonicalize_metrics(overall_metrics)
+
+        reasons: list[str] = []
+        if profitable_segments_ratio < 0.6:
+            reasons.append("unstable_segments")
+        if worst_segment_return < -0.05:
+            reasons.append("worst_segment_return")
+        if median_return <= 0:
+            reasons.append("median_return")
+        if any(int((seg.get("metrics", {}) or {}).get("total_trades", 0) or 0) == 0 for seg in segs):
+            reasons.append("no_trades_segment")
+
         results["overall"] = {
-            "total_return_avg": total_return_avg,
-            "sharpe_avg": sharpe_avg,
-            "max_drawdown_max": max_drawdown_max,
+            **{k: overall_metrics[k] for k in CANONICAL_METRIC_KEYS if k in overall_metrics},
             "profitable_segments_ratio": profitable_segments_ratio,
             "worst_segment_return": worst_segment_return,
             "median_return": median_return,
+            "final_decision": "reject" if reasons else "accept",
+            "reasons": reasons,
         }
 
     return results

@@ -61,10 +61,10 @@ def test_sweep_writes_score_and_filters_set_blocked_score(tmp_path):
     assert out_csv.exists()
     assert len(results) == 4
 
-    # long_window=50 -> features 全 NaN -> require_features 策略不交易 -> score 应被过滤为 -1e9
+    # long_window=50 -> features 全 NaN -> require_features 策略不交易 -> 应被标记为 passed=false（filter_reason=min_trades）
     blocked = [r for r in results if r.params["long_window"] == 50]
     assert blocked
-    assert all(r.score == -1e9 for r in blocked)
+    assert all((not r.passed) and (r.filter_reason is not None) for r in blocked)
 
     # CSV 应包含 score 列
     with out_csv.open("r", encoding="utf-8", newline="") as f:

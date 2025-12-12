@@ -21,6 +21,8 @@ class SweepResult:
     params: dict
     metrics: dict
     score: float
+    passed: bool = True
+    filter_reason: str | None = None
 
 
 def _product_dict(param_grid: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
@@ -55,10 +57,6 @@ def _calc_score(metrics: dict, weights: dict | None, low_trades_penalty: float =
     return base_score - penalty
 
 
-def _passes_filters(metrics: dict, filters: dict | None) -> bool:
-    return _filter_reason(metrics, filters) is None
-
-
 def _filter_reason(metrics: dict, filters: dict | None) -> str | None:
     if not filters:
         return None
@@ -72,6 +70,11 @@ def _filter_reason(metrics: dict, filters: dict | None) -> str | None:
     if min_sharpe is not None and metrics.get("sharpe", 0) < min_sharpe:
         return "min_sharpe"
     return None
+
+
+def passes_policy(metrics: dict, policy_cfg: dict | None) -> bool:
+    """兼容旧接口命名（filters=policy）。"""
+    return _filter_reason(metrics, policy_cfg) is None
 
 
 def _write_csv(path: Path, rows: Iterable[dict]) -> None:
@@ -115,10 +118,10 @@ def _run_single_combo(
     summary_dict = run_backtest(cfg_obj=cfg)
     metrics = summary_dict.get("metrics", {}) # type: ignore
     score = _calc_score(metrics, weights, low_trades_penalty=low_trades_penalty)
-    if not _passes_filters(metrics, filters):
-        score = -1e9  # 过滤掉的组合直接给极低分
+    reason = _filter_reason(metrics, filters)
+    passed = reason is None
     symbol = bt_cfg.get("symbol", "")
-    return SweepResult(symbol=symbol, params=combo, metrics=metrics, score=score)
+    return SweepResult(symbol=symbol, params=combo, metrics=metrics, score=score, passed=passed, filter_reason=reason)
 
 
 def grid_search(
@@ -180,6 +183,8 @@ def grid_search(
             **r.params,
             **r.metrics,
             "score": r.score,
+            "passed": r.passed,
+            "filter_reason": r.filter_reason,
         }
         rows.append(row)
     _write_csv(out_path, rows)
@@ -233,6 +238,8 @@ def random_search(
             **r.params,
             **r.metrics,
             "score": r.score,
+            "passed": r.passed,
+            "filter_reason": r.filter_reason,
         }
         rows.append(row)
     _write_csv(out_path, rows)

@@ -32,11 +32,15 @@ def pick_best_params(csv_path: str | Path, min_trades: int = 30) -> dict:
         except Exception:
             return default
 
-    def _scan(threshold: int):
+    def _scan(threshold: int, *, require_passed: bool):
         nonlocal best_row
         with path.open("r", newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
+                if require_passed and "passed" in row:
+                    passed_raw = str(row.get("passed") or "").strip().lower()
+                    if passed_raw not in {"1", "true", "yes", "y"}:
+                        continue
                 trades = _as_float(row.get("total_trades", 0))
                 if trades < threshold:
                     continue
@@ -52,10 +56,15 @@ def pick_best_params(csv_path: str | Path, min_trades: int = 30) -> dict:
                 if best_row is None or score > best_row["_score_eval"]:
                     best_row = row
 
-    _scan(min_trades)
+    # 优先使用 passed=true 的组合（若 CSV 提供该列）
+    _scan(min_trades, require_passed=True)
+    if best_row is None:
+        _scan(min_trades, require_passed=False)
     if best_row is None:
         # 放宽交易数限制重试，避免空集
-        _scan(0)
+        _scan(0, require_passed=True)
+    if best_row is None:
+        _scan(0, require_passed=False)
 
     if best_row is None:
         raise ValueError("No eligible rows found in sweep CSV")
