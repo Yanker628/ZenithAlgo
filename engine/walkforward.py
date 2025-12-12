@@ -143,7 +143,7 @@ def walk_forward(
         artifacts_dir = None
         if artifacts_base_dir:
             artifacts_dir = str(Path(artifacts_base_dir) / f"seg{idx}" / "test_backtest")
-        summary, _ = run_backtest(cfg_obj=cfg_test, artifacts_dir=artifacts_dir)
+        summary = run_backtest(cfg_obj=cfg_test, artifacts_dir=artifacts_dir)
         results["segments"].append(
             {
                 "train": [train_start.isoformat(), train_end.isoformat()],
@@ -155,12 +155,31 @@ def walk_forward(
         )
     # 汇总：简单取各段指标平均（可扩展为加权）
     if results["segments"]:
-        total_return = sum(seg["metrics"].get("total_return", 0) for seg in results["segments"]) / len(
-            results["segments"]
-        )
-        sharpe = sum(seg["metrics"].get("sharpe", 0) for seg in results["segments"]) / len(results["segments"])
-        max_dd = max(seg["metrics"].get("max_drawdown", 0) for seg in results["segments"])
-        results["overall"] = {"total_return_avg": total_return, "sharpe_avg": sharpe, "max_drawdown_max": max_dd}
+        segs = results["segments"]
+        n = len(segs)
+        returns = [float(seg["metrics"].get("total_return", 0.0) or 0.0) for seg in segs]
+        total_return_avg = sum(returns) / n if n else 0.0
+        sharpe_avg = sum(float(seg["metrics"].get("sharpe", 0.0) or 0.0) for seg in segs) / n if n else 0.0
+        max_drawdown_max = max(float(seg["metrics"].get("max_drawdown", 0.0) or 0.0) for seg in segs) if n else 0.0
+
+        profitable_segments_ratio = (sum(1 for r in returns if r > 0) / n) if n else 0.0
+        worst_segment_return = min(returns) if n else 0.0
+        sorted_returns = sorted(returns)
+        if n == 0:
+            median_return = 0.0
+        elif n % 2 == 1:
+            median_return = sorted_returns[n // 2]
+        else:
+            median_return = (sorted_returns[n // 2 - 1] + sorted_returns[n // 2]) / 2
+
+        results["overall"] = {
+            "total_return_avg": total_return_avg,
+            "sharpe_avg": sharpe_avg,
+            "max_drawdown_max": max_drawdown_max,
+            "profitable_segments_ratio": profitable_segments_ratio,
+            "worst_segment_return": worst_segment_return,
+            "median_return": median_return,
+        }
 
     return results
 

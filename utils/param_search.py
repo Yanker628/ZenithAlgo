@@ -104,13 +104,16 @@ def _run_single_combo(
 ) -> SweepResult:
     cfg = deepcopy(cfg_base)
     bt_cfg = deepcopy(cfg.backtest)
-    bt_cfg.update(combo)
+    # sweep 参数默认视为策略参数：写入 backtest.strategy，避免污染 backtest 顶层键
+    bt_strategy = dict(bt_cfg.get("strategy", {}) or {})
+    bt_strategy.update(combo)
+    bt_cfg["strategy"] = bt_strategy
     # 批量扫描时不需要绘图
     bt_cfg["skip_plots"] = True
     cfg.backtest = bt_cfg  # type: ignore[assignment]
 
-    summary = run_backtest(cfg_obj=cfg)
-    metrics = summary.get("metrics", {})
+    summary_dict = run_backtest(cfg_obj=cfg)
+    metrics = summary_dict.get("metrics", {}) # type: ignore
     score = _calc_score(metrics, weights, low_trades_penalty=low_trades_penalty)
     if not _passes_filters(metrics, filters):
         score = -1e9  # 过滤掉的组合直接给极低分

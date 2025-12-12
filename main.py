@@ -28,6 +28,7 @@ class CliArgs:
     train_ratio: float = 0.7
     min_trades: int = 10
     output_dir: str = "data/walkforward"
+    include_live_tests: bool = False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,6 +67,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_wf.add_argument("--min-trades", type=int, default=10)
     p_wf.add_argument("--output-dir", type=str, default="data/walkforward")
 
+    p_test = sub.add_parser("test", help="运行 pytest（默认跳过 live）")
+    p_test.add_argument(
+        "--include-live",
+        action="store_true",
+        help="包含 @pytest.mark.live 测试（可能联网）",
+    )
+
     return parser
 
 
@@ -94,6 +102,7 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
         train_ratio=float(getattr(ns, "train_ratio", 0.7)),
         min_trades=int(getattr(ns, "min_trades", 10)),
         output_dir=str(getattr(ns, "output_dir", "data/walkforward")),
+        include_live_tests=bool(getattr(ns, "include_live", False)),
     )
 
 
@@ -126,6 +135,13 @@ def main(argv: list[str] | None = None) -> Any:
             train_ratio=args.train_ratio,
             min_trades=args.min_trades,
         )
+    if args.task == "test":
+        import pytest
+
+        pytest_args = ["-q"]
+        if not args.include_live_tests:
+            pytest_args += ["-m", "not live"]
+        return pytest.main(pytest_args)
 
     raise ValueError(f"Unknown task: {args.task}")
 

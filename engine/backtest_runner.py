@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import argparse
+import json
+import sys
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -168,6 +171,20 @@ def run_backtest(
     candles_df = apply_factors(candles_df, factors) if not candles_df.empty else candles_df
     base_cols = {"ts", "symbol", "open", "high", "low", "close", "volume"}
     feature_cols = [c for c in candles_df.columns if c not in base_cols]
+    # data health（用于报告首页）
+    data_health: dict[str, Any] = {
+        "n_bars": int(len(candles_df)),
+        "symbol": str(bt_cfg.get("symbol", "")),
+        "interval": str(bt_cfg.get("interval", "")),
+        "start": str(bt_cfg.get("start", "")),
+        "end": str(bt_cfg.get("end", "")),
+        "n_features": int(len(feature_cols)),
+    }
+    if feature_cols and not candles_df.empty:
+        try:
+            data_health["feature_nan_ratio"] = float(candles_df[feature_cols].isna().mean().mean())
+        except Exception:
+            pass
 
     # 策略配置：合并 top-level strategy 与 backtest.strategy，并兼容 sweep 直接写在 backtest 顶层的覆盖项
     strategy_obj = getattr(cfg, "strategy", None)
@@ -285,6 +302,7 @@ def run_backtest(
 
     summary = build_backtest_summary(broker, last_prices)
     summary["metrics"] = compute_metrics(broker.equity_curve, broker.trades)
+    summary["data_health"] = data_health
     # 实验产物（可选）
     if artifacts_dir is not None:
         out_dir = Path(artifacts_dir)
@@ -305,5 +323,38 @@ def run_backtest(
     return summary
 
 
+def _build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="python -m engine.backtest_runner",
+        description="单次回测：读取 backtest 配置并输出 summary。",
+    )
+    p.add_argument("--cfg", default="config/config.yml", help="配置文件路径（默认 config/config.yml）")
+    p.add_argument(
+        "--artifacts-dir",
+        "--artifacts_dir",
+        dest="artifacts_dir",
+        default=None,
+        help="可选：产物输出目录（trades.csv/equity.csv/图表）",
+    )
+    p.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="把 summary 以 JSON 打印到 stdout",
+    )
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_arg_parser().parse_args(argv)
+    cfg_path = str(args.cfg)
+    if not Path(cfg_path).exists():
+        raise SystemExit(f"Config file not found: {cfg_path}")
+    summary = run_backtest(cfg_path=cfg_path, artifacts_dir=args.artifacts_dir)
+    if args.as_json:
+        print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
 if __name__ == "__main__":
-    run_backtest()
+    raise SystemExit(main(sys.argv[1:]))

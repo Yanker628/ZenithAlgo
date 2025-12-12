@@ -188,6 +188,15 @@ V2 只专注几件事：
 - `utils/param_search.py` 支持网格搜索，输出 CSV
 - TradeLogger/持仓/PnL 复用，权益曲线驱动指标计算
 
+# V2.4-0 研究框架补全（Sprint 0）
+
+> 目标：让研究产物结构化、可复现、可读（不再“能跑但抓不住重点”）。
+
+验收点（已实现）：
+- sweep（任意策略/任意参数维度>=1）必产出 `summary.md` 与至少 1 张图（2D heatmap / 1D 曲线 / 参数重要性兜底）
+- `report.md` 首页固定输出：data health / trade health / 核心绩效 / 稳定性结论
+- walk-forward overall 额外输出：`profitable_segments_ratio` / `worst_segment_return` / `median_return`
+
 ---
 
 ## 1. 目录与模块规划

@@ -20,58 +20,62 @@ exchange:
 risk:
   max_position_pct: 0.3
   max_daily_loss_pct: 1
+# === 修改点 1: 策略基础配置 ===
 strategy:
-  type: "simple_ma"
-  short_window: 7
-  long_window: 120
-  min_ma_diff: 0
-  cooldown_secs: 0
+  type: "trend_filtered" # ★ 必须与你 V2.3 代码中的注册名一致
+  # 默认参数（用于实盘或非 sweep 模式）
+  short_window: 10
+  long_window: 60
+  slope_threshold: 0.1 # ★ V2.3 新参数
+  atr_period: 14 # ★ V2.3 新参数
+  atr_stop_multiplier: 2.0 # ★ V2.3 止损倍数
 
 backtest:
   data_dir: "data/history"
   symbol: "BTCUSDT"
-  # symbols: ["BTCUSDT", "ETHUSDT"] # ★ 新：多品种列表（可选）
   interval: "1h"
+  # 为了 Walk-Forward 验证效果，建议覆盖完整周期（牛-熊-震荡）
   start: "2021-01-01T00:00:00Z"
-  end: "2024-12-01T00:00:00Z"
+  end: "2024-01-01T00:00:00Z"
   initial_equity: 1000
   auto_download: true
   quiet_risk_logs: true
   flatten_on_end: true
 
   fees:
-    maker: 0.0002 # 0.02%
-    taker: 0.0004 # 0.04%
-    slippage_bp: 1.0 # basis points，1bp=0.01%
+    maker: 0.0002
+    taker: 0.0004
+    slippage_bp: 1.0
 
   sizing:
-    position_pct: 0.2 # 总持仓不超过 20% 本金
-    trade_notional: 200 # 单笔最多 100 美元名义
+    position_pct: 0.2
+    trade_notional: 200
 
+  # 回测时的策略覆盖配置
   strategy:
-    type: "simple_ma"
-    # 单一运行参数
-    short_window: 10
-    long_window: 50
-    min_ma_diff: 0.5
-    cooldown_secs: 60
+    type: "trend_filtered" # ★ 保持一致
 
-  # 参数搜索配置（V2.1 核心）
+  # === 修改点 2: V2.3 验证核心配置 ===
   sweep:
     enabled: true
     mode: "grid"
-    min_trades: 10 # 过滤交易数过少的组合
-    max_drawdown: 1 # 回撤上限
-    min_sharpe: 0.0 # Sharpe 下限
-    low_trades_penalty: 1.0 # 交易数越少罚分越大，可按需调整
-    params:
-      short_window: [5, 7, 10, 12, 15, 18, 20]
-      long_window: [40, 60, 80, 100, 120, 150, 180]
-      min_ma_diff: [0.0, 0.5, 1.0]
-      cooldown_secs: [0, 60, 300]
+    min_trades: 15 # ★ 提高门槛，带有过滤器的策略如果不交易就没法验证
+    max_drawdown: 0.3 # 允许最大 30% 回撤
+    min_sharpe: 0.0 # 要求至少不亏钱
+    low_trades_penalty: 2.0 # 对交易过少的组合加大惩罚
 
-    # 评估指标权重（简单打分）
+    # ★ 针对 V2.3 逻辑的参数网格
+    params:
+      # 寻找最佳趋势定义：长周期均线
+      long_window: [60, 90, 120]
+
+      # 核心验证：斜率过滤器多强才合适？
+      slope_threshold: [0.05, 0.1, 0.2]
+
+      # (可选) 如果你想验证止损宽松度，可以把下面这行取消注释
+      # atr_stop_multiplier: [1.5, 2.0, 3.0]
+
     objective:
-      total_return_weight: 0.4
-      sharpe_weight: 0.4
-      max_drawdown_weight: -0.2 # 负号代表回撤越大越差
+      total_return_weight: 0.3
+      sharpe_weight: 0.5 # 侧重夏普（稳定性）
+      max_drawdown_weight: 0.2 # 兼顾回撤

@@ -134,6 +134,11 @@ python main.py runner --max-ticks 200
 python main.py backtest --config config/config.yml
 ```
 
+兼容旧入口（模块方式），并支持指定产物目录：
+```bash
+uv run python -m engine.backtest_runner --cfg config/config.yml --artifacts-dir data/experiments/_bt_oneoff
+```
+
 **参数网格搜索**
 ```bash
 python main.py sweep --config config/config.yml
@@ -145,6 +150,10 @@ python main.py walkforward --config config/config.yml
 ```
 
 V2.3 起，`backtest/sweep/walkforward` 会把实验产物统一落盘到 `data/experiments/`（含 `results.json`、`report.md`、配置快照，以及回测的 `trades.csv/equity.csv` 等）。
+
+2.4-0 起，实验目录还会包含：
+- `summary.md`：快速抓重点（验收点）
+- sweep 可视化对任意参数维度（>=1）都能产出至少 1 张图：2D heatmap（>=2 维）/ 1D 曲线（=1 维）/ 参数重要性（兜底）
 
 ## 📚 使用指南
 

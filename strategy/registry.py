@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from strategy.base import Strategy
 from strategy.simple_ma import SimpleMAStrategy
+from strategy.trend_filter import TrendFilteredStrategy
 from utils.config_loader import StrategyConfig
 
 _REGISTRY: dict[str, type[Strategy]] = {}
@@ -66,4 +67,5 @@ def build_strategy(cfg: StrategyConfig | Mapping[str, Any] | None) -> Strategy:
 
 # 默认注册
 register_strategy("simple_ma", SimpleMAStrategy)
+register_strategy("trend_filtered", TrendFilteredStrategy)
 
