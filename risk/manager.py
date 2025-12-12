@@ -1,5 +1,7 @@
 """风险管理与信号过滤。"""
 
+from dataclasses import replace
+
 from market.models import OrderSignal, Position
 from utils.logging import setup_logger
 from utils.config_loader import RiskConfig
@@ -69,7 +71,7 @@ class RiskManager:
 
         Notes
         -----
-        本方法会**原地修改**传入信号的 qty（如做仓位裁剪）。
+        本方法不会修改传入的信号对象；会返回新的 `OrderSignal` 实例列表。
         """
         # 如果今日已经触发日损，直接静默丢弃，不再刷 warning
         if self._daily_blocked:
@@ -77,24 +79,25 @@ class RiskManager:
 
         result: list[OrderSignal] = []
         for sig in signals:
+            qty = sig.qty
             max_pct = getattr(self.cfg, "max_position_pct", None)
             if max_pct is not None:
                 price = getattr(sig, "price", None)
                 # 优先按名义比例裁剪；若价格或基准资金缺失，则回退按数量裁剪（兼容测试）
                 if price is not None and self.equity_base:
                     max_notional = self.equity_base * max_pct
-                    target_notional = price * sig.qty
+                    target_notional = price * qty
                     if target_notional > max_notional and price > 0:
                         clipped_qty = max_notional / price
                         self.logger.info(
                             f"Signal notional {target_notional:.4f} > {max_notional:.4f}, clip qty to {clipped_qty:.6f}"
                         )
-                        sig.qty = clipped_qty
+                        qty = clipped_qty
                 else:
-                    if sig.qty > max_pct:
+                    if qty > max_pct:
                         self.logger.info(
-                            f"Signal qty {sig.qty} > max_position_pct, clip to {max_pct}"
+                            f"Signal qty {qty} > max_position_pct, clip to {max_pct}"
                         )
-                        sig.qty = max_pct
-            result.append(sig)
+                        qty = max_pct
+            result.append(replace(sig, qty=qty))
         return result

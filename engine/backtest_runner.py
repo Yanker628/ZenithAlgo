@@ -9,7 +9,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict
 
 import pandas as pd
 
@@ -170,8 +170,9 @@ def run_backtest(
     feature_cols = [c for c in candles_df.columns if c not in base_cols]
 
     # 策略配置：合并 top-level strategy 与 backtest.strategy，并兼容 sweep 直接写在 backtest 顶层的覆盖项
-    base_type = getattr(cfg, "strategy", None).type if getattr(cfg, "strategy", None) else "simple_ma"
-    base_params = dict(getattr(cfg, "strategy", None).params) if getattr(cfg, "strategy", None) else {}
+    strategy_obj = getattr(cfg, "strategy", None)
+    base_type = strategy_obj.type if strategy_obj else "simple_ma"
+    base_params = dict(strategy_obj.params) if strategy_obj else {}
     bt_strategy_dict = bt_cfg.get("strategy", {}) if isinstance(bt_cfg, dict) else {}
     bt_type = str(bt_strategy_dict.get("type") or base_type)
     bt_params = dict(bt_strategy_dict) if isinstance(bt_strategy_dict, dict) else {}

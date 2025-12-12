@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Tuple
 from engine.backtest_runner import run_backtest, parse_iso
 from utils.best_params import pick_best_params
 from utils.config_loader import load_config
-from utils.param_search import grid_search
+from utils.param_search import grid_search, random_search
 
 
 def _split_segments(
@@ -80,6 +80,22 @@ def walk_forward(
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    sweep_cfg = bt_cfg.get("sweep", {}) or {}
+    mode = str(sweep_cfg.get("mode", "grid")).lower()
+    param_grid = sweep_cfg.get("params", {}) or {}
+    obj = sweep_cfg.get("objective", {}) or {}
+    weights = {
+        "total_return": float(obj.get("total_return_weight", 0.0)),
+        "sharpe": float(obj.get("sharpe_weight", 0.0)),
+        "max_drawdown": float(obj.get("max_drawdown_weight", 0.0)),
+    }
+    filters = sweep_cfg.get("filters") or {
+        "min_trades": sweep_cfg.get("min_trades"),
+        "max_drawdown": sweep_cfg.get("max_drawdown"),
+        "min_sharpe": sweep_cfg.get("min_sharpe"),
+    }
+    low_trades_penalty = float(sweep_cfg.get("low_trades_penalty", 0.0))
+
     for idx, ((train_start, train_end), (test_start, test_end)) in enumerate(segments, 1):
         # 训练段：跑 sweep
         bt_train = deepcopy(bt_cfg)
@@ -90,15 +106,28 @@ def walk_forward(
         cfg_train.backtest = bt_train  # type: ignore[assignment]
 
         sweep_csv = out_dir / f"{symbol}_{interval}_wf_train{idx}.csv"
-        # 用 grid_search 扫描
-        grid_search(
-            cfg_path,
-            bt_cfg.get("sweep", {}).get("params", {}),
-            objective_weights=None,
-            output_csv=str(sweep_csv),
-            cfg_obj=cfg_train,
-            filters=bt_cfg.get("sweep", {}).get("filters"),
-        )
+        if mode == "random":
+            n_samples = int(sweep_cfg.get("n_random", 20))
+            random_search(
+                cfg_path,
+                param_grid,
+                n_samples,
+                objective_weights=weights,
+                output_csv=str(sweep_csv),
+                cfg_obj=cfg_train,
+                filters=filters,
+                low_trades_penalty=low_trades_penalty,
+            )
+        else:
+            grid_search(
+                cfg_path,
+                param_grid,
+                objective_weights=weights,
+                output_csv=str(sweep_csv),
+                cfg_obj=cfg_train,
+                filters=filters,
+                low_trades_penalty=low_trades_penalty,
+            )
         best_params = pick_best_params(sweep_csv, min_trades=min_trades)
 
         # 测试段：应用最佳参数回测
