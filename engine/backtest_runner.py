@@ -20,12 +20,13 @@ from broker.backtest import BacktestBroker
 from market.models import OrderSignal, Tick
 from factors.registry import apply_factors, build_factors
 from risk.manager import RiskManager
+from engine.signal_pipeline import prepare_signals
 from strategy.registry import build_strategy
 from utils.config_loader import load_config, StrategyConfig
 from utils.data_loader import HistoricalDataLoader
 from utils.logging import setup_logger
 from utils.pnl import compute_unrealized_pnl
-from utils.sizer import resolve_sizing_cfg, size_signals
+from utils.sizer import resolve_sizing_cfg
 from utils.metrics import compute_metrics
 from utils.plotter import plot_drawdown, plot_equity_curve, plot_return_hist
 
@@ -99,12 +100,14 @@ def _export_trades_csv(trades: list[dict], path: Path) -> None:
     df = pd.DataFrame(rows)
     df.to_csv(path, index=False)
 
+
 def _resolve_strategy_param(bt_cfg: dict, cfg, key: str, default: Any = None) -> Any:
-    if isinstance(bt_cfg, dict) and key in bt_cfg and bt_cfg.get(key) is not None:
-        return bt_cfg.get(key)
     strat = bt_cfg.get("strategy", {}) if isinstance(bt_cfg, dict) else {}
     if isinstance(strat, dict) and key in strat and strat.get(key) is not None:
         return strat.get(key)
+    # legacy: 兼容 backtest 顶层漂浮参数（逐步收敛到 backtest.strategy）
+    if isinstance(bt_cfg, dict) and key in bt_cfg and bt_cfg.get(key) is not None:
+        return bt_cfg.get(key)
     try:
         params = getattr(cfg, "strategy", None).params  # type: ignore[union-attr]
     except Exception:
@@ -112,6 +115,17 @@ def _resolve_strategy_param(bt_cfg: dict, cfg, key: str, default: Any = None) ->
     if isinstance(params, dict) and key in params and params.get(key) is not None:
         return params.get(key)
     return default
+
+
+def _append_equity_point(equity_curve: list[tuple[datetime, float]], ts: datetime, equity: float) -> None:
+    """
+    追加（或覆盖）权益曲线点：
+    - 同一 ts 重复写入时，覆盖最后一个点，避免重复 ts 造成指标波动。
+    """
+    if equity_curve and equity_curve[-1][0] == ts:
+        equity_curve[-1] = (ts, equity)
+    else:
+        equity_curve.append((ts, equity))
 
 
 def run_backtest(
@@ -145,6 +159,7 @@ def run_backtest(
     if bt_cfg is None:
         raise ValueError("backtest config not found")
     logger = setup_logger("backtest")
+    record_equity_each_bar = bool(bt_cfg.get("record_equity_each_bar", False)) if isinstance(bt_cfg, dict) else False
 
     loader = HistoricalDataLoader(bt_cfg["data_dir"])
     candles = loader.load_klines_for_backtest(
@@ -196,11 +211,21 @@ def run_backtest(
     bt_params.pop("type", None)
 
     merged_params = {**base_params, **bt_params}
-    # sweep 兼容：允许 short_window/long_window/... 出现在 backtest 顶层
-    for k in ["short_window", "long_window", "min_ma_diff", "cooldown_secs"]:
+    # legacy sweep 兼容：允许 short_window/long_window/... 出现在 backtest 顶层
+    legacy_keys = ["short_window", "long_window", "min_ma_diff", "cooldown_secs"]
+    legacy_hits: list[str] = []
+    for k in legacy_keys:
+        if isinstance(bt_cfg, dict) and k in bt_cfg and (k not in bt_params):
+            legacy_hits.append(k)
         v = _resolve_strategy_param(bt_cfg, cfg, k, None)
         if v is not None:
             merged_params[k] = v
+    if legacy_hits:
+        logger.warning(
+            "Deprecated backtest top-level strategy overrides detected (%s). "
+            "Please move them into backtest.strategy.*",
+            ",".join(sorted(set(legacy_hits))),
+        )
     merged_params.setdefault("short_feature", short_feature)
     merged_params.setdefault("long_feature", long_feature)
     merged_params["require_features"] = True
@@ -259,22 +284,42 @@ def run_backtest(
         daily_pnl_pct = total_pnl / base_for_day if base_for_day else 0.0
         risk.set_daily_pnl(daily_pnl_pct)
 
-        # 策略
-        signals = strat.on_tick(tick)
-        if not signals:
-            continue
-
-        for sig in signals:
-            sig.price = tick.price
-        sized_signals = size_signals(signals, broker, sizing_cfg, equity_base, logger=logger)
-
-        filtered = risk.filter_signals(sized_signals)
+        filtered = prepare_signals(
+            tick=tick,
+            strategy=strat,
+            broker=broker,
+            risk=risk,
+            sizing_cfg=sizing_cfg,
+            equity_base=equity_base,
+            last_prices=last_prices,
+            logger=logger,
+        )
         if not filtered:
+            # 逐 bar 记录：即使无成交，也做一次 MTM 记账
+            if record_equity_each_bar:
+                broker.last_prices.update(last_prices)
+                broker.unrealized_pnl = broker._compute_unrealized_pnl()
+                equity = broker.cash + sum(
+                    p.qty * broker.last_prices.get(sym, p.avg_price) for sym, p in broker.positions.items()
+                )
+                _append_equity_point(broker.equity_curve, tick.ts, equity)
             continue
 
         for sig in filtered:
-            res = broker.execute(sig, tick_price=tick.price, ts=tick.ts)
+            res = broker.execute(
+                sig,
+                tick_price=tick.price,
+                ts=tick.ts,
+                record_equity=(not record_equity_each_bar),
+            )
             logger.debug(f"Backtest order: {res}")
+        if record_equity_each_bar:
+            broker.last_prices.update(last_prices)
+            broker.unrealized_pnl = broker._compute_unrealized_pnl()
+            equity = broker.cash + sum(
+                p.qty * broker.last_prices.get(sym, p.avg_price) for sym, p in broker.positions.items()
+            )
+            _append_equity_point(broker.equity_curve, tick.ts, equity)
 
     # 可选：回测结束强制平仓，避免未实现收益影响胜率/统计
     flatten_on_end = bool(bt_cfg.get("flatten_on_end", False)) if isinstance(bt_cfg, dict) else False
@@ -288,7 +333,14 @@ def run_backtest(
             side = "sell" if pos.qty > 0 else "buy"
             qty = abs(pos.qty)
             sig = OrderSignal(symbol=sym, side=side, qty=qty, reason="flatten")
-            broker.execute(sig, tick_price=mkt_price, ts=last_ts)
+            broker.execute(sig, tick_price=mkt_price, ts=last_ts, record_equity=(not record_equity_each_bar))
+        if record_equity_each_bar:
+            broker.last_prices.update(last_prices)
+            broker.unrealized_pnl = broker._compute_unrealized_pnl()
+            equity = broker.cash + sum(
+                p.qty * broker.last_prices.get(sym, p.avg_price) for sym, p in broker.positions.items()
+            )
+            _append_equity_point(broker.equity_curve, last_ts, equity)
 
     # 确保最终权益曲线记录最新价格（即使末尾无成交）
     if last_ts is not None and last_prices:
@@ -298,7 +350,11 @@ def run_backtest(
         final_equity = broker.cash + sum(
             p.qty * broker.last_prices.get(sym, p.avg_price) for sym, p in broker.positions.items()
         )
-        broker.equity_curve.append((last_ts, final_equity))
+        # 默认保持历史行为：即使同一 ts 已有成交点，也追加最终点（可能出现重复 ts）。
+        if record_equity_each_bar:
+            _append_equity_point(broker.equity_curve, last_ts, final_equity)
+        else:
+            broker.equity_curve.append((last_ts, final_equity))
 
     summary = build_backtest_summary(broker, last_prices)
     summary["metrics"] = compute_metrics(broker.equity_curve, broker.trades)

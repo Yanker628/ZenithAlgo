@@ -11,11 +11,12 @@ from broker.binance import BinanceBroker
 from broker.mock import MockBroker
 from market.client import BinanceMarketClient, FakeMarketClient
 from risk.manager import RiskManager
+from engine.signal_pipeline import prepare_signals
 from strategy.registry import build_strategy
 from utils.config_loader import load_config
 from utils.logging import setup_logger
 from utils.pnl import compute_unrealized_pnl
-from utils.sizer import resolve_sizing_cfg, size_signals
+from utils.sizer import resolve_sizing_cfg
 from utils.trade_logger import TradeLogger
 
 
@@ -145,18 +146,16 @@ def run_runner(
             risk.reset_daily_state()
             logger.info("Trading day changed to %s, reset daily PnL.", current_trading_day.isoformat())
 
-        # 1. 策略产生原始信号
-        raw_signals = strat.on_tick(tick)
-        if not raw_signals:
-            continue
-
-        # 2. 统一 sizing：先补价格，再算真实下单数量
-        for sig in raw_signals:
-            sig.price = last_prices.get(sig.symbol) or tick.price
-        sized_signals = size_signals(raw_signals, broker, sizing_cfg, equity_base, logger=logger)
-
-        # 3. 风控过滤
-        filtered_signals = risk.filter_signals(sized_signals)
+        filtered_signals = prepare_signals(
+            tick=tick,
+            strategy=strat,
+            broker=broker,
+            risk=risk,
+            sizing_cfg=sizing_cfg,
+            equity_base=equity_base,
+            last_prices=last_prices,
+            logger=logger,
+        )
         if not filtered_signals:
             continue
 

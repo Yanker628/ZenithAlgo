@@ -17,13 +17,17 @@ def run_single_backtest(cfg_obj, symbol: str | None = None, strategy_params: dic
     Notes
     -----
     该函数会在传入的 cfg_obj 上原地更新 backtest 配置。
+
+    V2.4 起建议把策略参数覆盖统一写入 `backtest.strategy`，避免污染 `backtest` 顶层键。
     """
     cfg = cfg_obj
     bt_cfg = cfg.backtest
     if symbol:
         bt_cfg["symbol"] = symbol
     if strategy_params:
-        bt_cfg.update(strategy_params)
+        bt_strategy = dict(bt_cfg.get("strategy", {}) or {})
+        bt_strategy.update(strategy_params)
+        bt_cfg["strategy"] = bt_strategy
     cfg.backtest = bt_cfg
     return run_backtest(cfg_obj=cfg)
 

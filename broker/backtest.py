@@ -76,6 +76,7 @@ class BacktestBroker(Broker):
         signal: OrderSignal,
         tick_price: float | None = None,
         ts: datetime | None = None,
+        record_equity: bool = True,
         **kwargs,
     ) -> dict:
         """模拟执行一个订单信号。
@@ -88,6 +89,8 @@ class BacktestBroker(Broker):
             当前 tick 价格（必填）。
         ts:
             tick 时间，用于记录权益曲线。
+        record_equity:
+            是否把权益点写入 `equity_curve`。默认 True（保持历史行为）。
 
         Returns
         -------
@@ -152,7 +155,7 @@ class BacktestBroker(Broker):
         equity = self.cash + sum(
             p.qty * self.last_prices.get(sym, p.avg_price) for sym, p in self.positions.items()
         )
-        if ts:
+        if ts and record_equity:
             self.equity_curve.append((ts, equity))
 
         self.trades.append(
