@@ -31,6 +31,10 @@ backtest:
   auto_download: false
   quiet_risk_logs: true
   skip_plots: false
+  # 权益曲线记录口径：
+  # - false（默认）：仅在成交时点记录权益（更快，但 Sharpe/回撤口径更粗）
+  # - true：逐 bar mark-to-market 记录权益（更真实）
+  record_equity_each_bar: false
 
   fees:
     maker: 0.0002
