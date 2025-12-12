@@ -41,6 +41,7 @@ def walk_forward(
     train_ratio: float = 0.7,
     min_trades: int = 10,
     output_dir: str = "data/walkforward",
+    artifacts_base_dir: str | None = None,
 ):
     """执行 Walk-Forward 验证。
 
@@ -56,6 +57,8 @@ def walk_forward(
         训练段筛选最优参数时要求的最少交易数。
     output_dir:
         sweep CSV 输出目录。
+    artifacts_base_dir:
+        可选：为每个测试段 backtest 生成 trades/equity/图表等产物的根目录。
 
     Returns
     -------
@@ -108,13 +111,17 @@ def walk_forward(
         cfg_test = deepcopy(cfg)
         cfg_test.backtest = bt_test  # type: ignore[assignment]
 
-        summary = run_backtest(cfg_obj=cfg_test)
+        artifacts_dir = None
+        if artifacts_base_dir:
+            artifacts_dir = str(Path(artifacts_base_dir) / f"seg{idx}" / "test_backtest")
+        summary, _ = run_backtest(cfg_obj=cfg_test, artifacts_dir=artifacts_dir)
         results["segments"].append(
             {
                 "train": [train_start.isoformat(), train_end.isoformat()],
                 "test": [test_start.isoformat(), test_end.isoformat()],
                 "params": best_params,
                 "metrics": summary.get("metrics", {}),
+                "artifacts_dir": artifacts_dir,
             }
         )
     # 汇总：简单取各段指标平均（可扩展为加权）

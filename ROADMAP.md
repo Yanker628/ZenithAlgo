@@ -343,3 +343,246 @@ ZenithAlgo/
   README.md
   ROADMAP_V2.2.md                   # 本文件
 ```
+
+# ZenithAlgo V2.3 开发 Roadmap
+
+> 版本定位：把现有的 **“单策略脚本式回测/实盘”** 推进到 **“可复用的因子(Feature)/信号(Signal)/组合(Portfolio)实验框架”**。  
+> 核心目标是 **解耦 + 可重复实验 + 更可信的回测**，让你后面做策略优化不再“改一处炸全身”。
+
+---
+
+## 0. V2.3 目标与非目标
+
+### 0.1 目标（你下一步最该干什么）
+
+1. **因子层/特征层抽象**：把 MA、RSI、ATR… 这类“指标计算”从策略里拆出来，形成 `factors/`（或 `features/`）库。
+2. **信号层标准化**：策略只做 “基于因子 → 生成信号”，不负责数据读取、仓位、成交仿真细节。
+3. **实验可复现**：每一次 sweep / walk-forward 都能落盘：配置、代码版本、数据区间、结果、图。
+4. **更靠谱的回测引擎**：至少把 **成交/费用/滑点/仓位** 的语义统一起来，避免“指标很好看但不可信”。
+5. **评估体系升级**：除了你已有的 `total_return/max_drawdown/sharpe/win_rate`，补上策略研究常用的关键指标和诊断输出。
+
+### 0.2 非目标（V2.3 先不碰）
+
+- 多交易所撮合、订单簿级撮合、延迟/部分成交建模（太重）
+- 多策略组合调度器（先把单策略实验框架打牢）
+- Web Dashboard（先保证 CLI + 报告产出）
+
+---
+
+## 1. 现状复盘（基于你仓库里已实现的 V2.2 能力）
+
+你现在已经有：
+
+- `engine/batch_backtest.py`：支持 sweep、输出 CSV、并尝试画热力图
+- `engine/walkforward.py`：支持分段 train(sweep)+test(backtest) 的 walk-forward
+- `risk/manager.py`：已加入“日损触发后不再刷 warning”、支持名义裁剪等细节
+- `main.py`：统一 CLI 子命令 runner/backtest/sweep/walkforward
+
+**最大短板**：策略/指标/回测耦合仍偏紧，导致：
+
+- 做新指标要改策略文件
+- 做多指标组合实验不优雅
+- 研究结果难以“复现实验”和比较
+
+---
+
+## 2. V2.3 设计原则：把系统拆成 4 个层
+
+> 你问“是不是没解耦？别人做因子库组合实验”——是的，V2.3 就把这块补齐。
+
+### 2.1 数据层（Data）
+
+- 负责：加载、对齐、清洗、重采样、缓存
+- 输出：统一的 `CandleFrame`（pandas DataFrame 或你自定义轻量结构）
+
+### 2.2 因子层（Factors / Features）
+
+- 负责：给 `CandleFrame` 添加列（feature columns）
+- 例：`ma_5`, `ma_20`, `rsi_14`, `atr_14`, `vol_zscore_60` …
+- 关键：**纯函数化**，不依赖 broker/risk，不产生交易动作
+
+### 2.3 信号层（Signals / Strategy）
+
+- 输入：带 features 的数据
+- 输出：标准化 `OrderSignal`（buy/sell/flat + reason + strength 可选）
+- 策略只关心“何时进出”，不关心“怎么成交/怎么计费”
+
+### 2.4 执行层（Execution: Broker + Risk + Sizer）
+
+- Broker：成交仿真、费用/滑点、持仓/现金、equity curve、trade log
+- Risk：风控过滤（你已有基础）
+- Sizer：仓位与下单量（从策略/风险里再拆出来）
+
+---
+
+## 3. 目录结构调整（建议）
+
+在不大改你当前结构的前提下新增：
+
+```text
+ZenithAlgo/
+  factors/
+    base.py            # Factor 抽象/协议
+    ma.py              # MA 因子
+    rsi.py             # RSI 因子（V2.3 新增示例）
+    atr.py             # ATR 因子（用于止损/仓位）
+    registry.py        # 因子注册表（字符串 -> 实现）
+  research/
+    experiment.py      # 统一实验入口（run_experiment）
+    report.py          # 生成 markdown/html 报告（先 md）
+    schemas.py         # ExperimentConfig / Result schema
+  sizing/
+    base.py
+    fixed_notional.py  # 固定名义（用你 yml 里的 trade_notional）
+    pct_equity.py      # 按权益比例（position_pct）
+  engine/
+    backtest_runner.py # 只做 orchestration，少掺策略细节
+    batch_backtest.py
+    walkforward.py
+```
+
+---
+
+## 4. 里程碑拆解（按优先级从“必须”到“加分”）
+
+### M1（必须）：因子库 & 注册机制
+
+**工作项**
+
+- 新增 `factors/base.py`：定义 `Factor` 协议：`name`, `params`, `compute(df)->df`
+- 新增 `factors/registry.py`：`register_factor(name, cls)` + `build_factors(cfg)`
+- 把 `SimpleMAStrategy` 用到的均线计算迁移到因子层：`factors/ma.py`
+- 策略改成：只读取 `df['ma_short']`/`df['ma_long']` 或类似命名
+
+**验收（必须全部满足）**
+
+- [ ] `python -m main backtest --config ...` 能跑通（结果不要求更好，但一致/可解释）
+- [ ] 在配置里改 factor 参数，不改策略代码也能生效
+- [ ] 因子输出列名稳定且可在日志中打印（debug）
+
+---
+
+### M2（必须）：Sizer 解耦（让 qty 不再到处“顺手改”）
+
+**工作项**
+
+- 新增 `sizing/`：把 yml 的 `backtest.sizing.position_pct/trade_notional` 落地成可切换实现
+- `RiskManager.filter_signals` 只做过滤/裁剪，不负责“计算应该下多少”
+- `BacktestBroker.execute` 仍负责成交，但 **signal.qty 的来源统一由 sizer 产生**
+
+**验收**
+
+- [ ] 固定名义模式下：`trade_notional=200` 能稳定控制每笔下单名义接近 200（允许因最小步进/裁剪有误差）
+- [ ] 按权益比例模式下：持仓名义不超过 `position_pct * equity_base`
+- [ ] 风控触发时不刷屏 warning；跨“日”后可 reset 恢复交易
+
+---
+
+### M3（必须）：实验可复现（Experiment Runner）
+
+**工作项**
+
+- 新增 `research/experiment.py`：一个入口 `run_experiment(cfg_path)`，统一产出：
+  - `results.json`（含 metrics、params、时间区间、代码版本 hash）
+  - `trades.csv`（每笔成交）
+  - `equity.csv`（权益曲线）
+  - `report.md`（关键图+关键指标）
+- sweep/walk-forward 调用 experiment runner，而不是直接散落在不同脚本里
+- 在输出目录结构里包含：symbol/interval/start_end/timestamp
+
+**验收**
+
+- [ ] 任意一次 backtest/sweep/walkforward 都会在 `data/experiments/...` 下生成一套完整产物
+- [ ] `report.md` 至少包含：参数、总收益、最大回撤、Sharpe、交易次数、权益曲线图路径
+- [ ] 结果里记录配置快照（把最终生效的 cfg dump 出来）
+
+---
+
+### M4（加分但强烈建议）：指标体系升级 + 回测诊断
+
+**工作项**
+
+- 在 metrics 里新增：
+  - `profit_factor`（总盈利/总亏损绝对值）
+  - `expectancy`（单笔期望）
+  - `avg_trade_return`、`std_trade_return`
+  - `exposure`（持仓时间占比）
+  - `turnover`（换手/交易频率）
+- 输出基本诊断图：
+  - equity、drawdown（你已有）
+  - trade PnL 分布
+  - rolling sharpe（可选）
+- 统一 max_drawdown 的符号约定（建议输出 **正数**，表示 “回撤幅度”）
+
+**验收**
+
+- [ ] `metrics` 字段包含上述新增项（允许部分为 0，但不能缺失 key）
+- [ ] `max_drawdown` 不再出现“有时正有时负”的混乱（统一口径）
+
+---
+
+### M5（加分）：更好用的热力图/研究输出（解决“只有 16 个格子很简陋”）
+
+热力图格子少，常见原因：
+
+- sweep 维度太少（只画 short x long 两维）
+- 过滤条件把大量组合过滤掉（min_trades/max_dd/min_sharpe）
+
+**工作项**
+
+- `plot_sweep_heatmap` 支持：
+  - 选择 metric（score/return/sharpe/dd）
+  - 对其它维度做固定值切片（例如固定 min_ma_diff=0.5）
+  - 自动生成多张图（对每个 min_ma_diff / cooldown 生成一张）
+- 在 sweep 输出中保存 “被过滤原因统计”（多少组合因为 min_trades 被丢）
+
+**验收**
+
+- [ ] 对同一份 sweep CSV，可以输出 ≥3 张不同切片热力图
+- [ ] report.md 中能看到“过滤统计”和“最佳参数在哪张图/哪个格子”
+
+---
+
+## 5. 测试计划（你接下来要测哪些功能）
+
+### 5.1 单元测试（建议用 pytest）
+
+- factors：
+  - MA/RSI/ATR 对一段固定数据输出列长度正确、无 NaN 爆炸
+- sizing：
+  - fixed_notional：名义误差范围
+  - pct_equity：不超过上限
+- risk：
+  - 日损触发后：`filter_signals` 永远返回空；跨日 reset 后恢复
+- metrics：
+  - max_drawdown 口径一致；profit_factor 在全亏损时不崩
+
+### 5.2 集成测试（CLI）
+
+- [ ] `python -m main backtest --config config/config.yml`
+- [ ] `python -m main sweep --config config/config.yml --top-n 5`
+- [ ] `python -m main walkforward --config config/config.yml --n-segments 3`
+- [ ] 每个命令都能产出 experiment artifacts（M3）
+
+---
+
+## 6. 交付物清单（V2.3 Done 的标准）
+
+- [ ] `factors/` 因子库 + registry + 至少 3 个因子（MA/RSI/ATR）
+- [ ] `sizing/` 两种仓位方法可切换
+- [ ] `research/experiment.py` + 统一落盘结构 + `report.md`
+- [ ] metrics 扩展 + drawdown 口径统一
+- [ ] sweep 热力图增强（多切片/多指标/过滤统计）
+- [ ] 最少 10 个 pytest 用例覆盖关键路径
+
+---
+
+## 7. 你现在立刻可以按顺序做的 ToDo（实操版）
+
+1. 先建 `factors/`：把 MA 计算从策略里拔出来（M1）
+2. 把 “下单量” 从 strategy/risk 里拔出来：实现 `FixedNotionalSizer`（M2）
+3. 做 `research/experiment.py`：把 backtest 结果完整落盘（M3）
+4. 把 metrics 补齐 + drawdown 统一（M4）
+5. 最后搞热力图增强（M5）
+
+> 先解耦，再优化策略，效率会陡增；否则就是在“泥地里装涡轮增压”。

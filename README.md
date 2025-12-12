@@ -34,9 +34,19 @@ ZenithAlgo/
 │   ├── backtest_runner.py    # 单次回测引擎
 │   ├── batch_backtest.py     # 批量回测/参数搜索
 │   └── walkforward.py        # Walk-Forward 验证
+├── factors/             # 因子/特征库（V2.3）
+│   ├── base.py
+│   ├── registry.py
+│   ├── ma.py
+│   ├── rsi.py
+│   └── atr.py
 ├── strategy/            # 策略模块
 │   ├── base.py          # 策略基类
 │   └── simple_ma.py     # 简单均线策略示例
+├── sizing/              # 仓位/下单量（V2.3）
+│   ├── base.py
+│   ├── fixed_notional.py
+│   └── pct_equity.py
 ├── risk/                # 风险管理
 │   └── manager.py       # 风控管理器
 ├── broker/              # 交易接口
@@ -54,6 +64,10 @@ ZenithAlgo/
 │   ├── param_search.py  # 参数搜索
 │   ├── plotter.py       # 可视化工具
 │   └── trade_logger.py  # 交易日志
+├── research/            # 实验与报告（V2.3）
+│   ├── experiment.py
+│   ├── report.py
+│   └── schemas.py
 ├── config/              # 配置文件
 │   ├── config.example.yml  # 配置示例
 │   └── config.yml       # 实际配置（需自行创建）
@@ -129,6 +143,8 @@ python main.py sweep --config config/config.yml
 ```bash
 python main.py walkforward --config config/config.yml
 ```
+
+V2.3 起，`backtest/sweep/walkforward` 会把实验产物统一落盘到 `data/experiments/`（含 `results.json`、`report.md`、配置快照，以及回测的 `trades.csv/equity.csv` 等）。
 
 ## 📚 使用指南
 
@@ -212,6 +228,22 @@ backtest:
   sizing:
     position_pct: 0.2         # 最大持仓比例
     trade_notional: 200       # 单笔最大名义价值
+
+  # 因子（V2.3）：策略只读取列名，不再在策略内硬编码指标计算
+  factors:
+    - name: "ma"
+      params: {window: 10, price_col: "close", out_col: "ma_short"}
+    - name: "ma"
+      params: {window: 50, price_col: "close", out_col: "ma_long"}
+    - name: "rsi"
+      params: {period: 14, price_col: "close", out_col: "rsi_14"}
+    - name: "atr"
+      params: {period: 14, out_col: "atr_14"}
+
+  # 回测策略（可选）：若你修改因子输出列名，可在这里改 short_feature/long_feature
+  strategy:
+    short_feature: "ma_short"
+    long_feature: "ma_long"
 ```
 
 ### 策略开发

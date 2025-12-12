@@ -180,3 +180,99 @@ def plot_sweep_heatmap(
         fig.savefig(str(path), bbox_inches="tight")
         plt.close(fig)
     return fig
+
+
+def plot_sweep_heatmaps(
+    csv_path: str | Path,
+    *,
+    x_param: str = "short_window",
+    y_param: str = "long_window",
+    value_param: str = "score",
+    slice_param: str | None = None,
+    save_dir: str | Path | None = None,
+    filters: dict | None = None,
+    fixed: dict | None = None,
+):
+    """批量生成热力图（支持对其它维度切片）。
+
+    Parameters
+    ----------
+    csv_path:
+        sweep 输出 CSV。
+    x_param, y_param:
+        横纵轴参数名。
+    value_param:
+        指标列（score/total_return/sharpe/max_drawdown 等）。
+    slice_param:
+        可选：按该参数的不同取值分别生成一张图。
+    save_dir:
+        输出目录（传入后会写文件并返回路径列表）。
+    filters:
+        可选过滤（min_trades/max_drawdown/min_sharpe）。
+    fixed:
+        对其它维度做固定值筛选，例如 {"min_ma_diff": 0.5}。
+    """
+    try:
+        import pandas as pd  # type: ignore
+        import seaborn as sns  # type: ignore
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError("需要 pandas 和 seaborn 才能生成热力图") from exc
+
+    def _plot_df(df_in, save_path: str | None):
+        if x_param not in df_in.columns or y_param not in df_in.columns or value_param not in df_in.columns:
+            raise ValueError(f"缺少必要列: {x_param}, {y_param}, {value_param}")
+        pivot = df_in.pivot_table(index=y_param, columns=x_param, values=value_param, aggfunc="mean")
+        plt = _require_matplotlib()
+        fig, ax = plt.subplots(figsize=(8, 6))
+        sns.heatmap(pivot, annot=True, fmt=".2f", cmap="coolwarm", ax=ax)
+        ax.set_title(f"{value_param} heatmap")
+        ax.set_xlabel(x_param)
+        ax.set_ylabel(y_param)
+        if save_path:
+            path = Path(save_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(str(path), bbox_inches="tight")
+            plt.close(fig)
+        return fig
+
+    df = pd.read_csv(csv_path)
+    if fixed:
+        for k, v in fixed.items():
+            if k in df.columns:
+                df = df[df[k] == v]
+    if filters:
+        if "min_trades" in filters and "total_trades" in df.columns:
+            df = df[df["total_trades"] >= filters["min_trades"]]
+        if "max_drawdown" in filters and "max_drawdown" in df.columns:
+            df = df[df["max_drawdown"] <= filters["max_drawdown"]]
+        if "min_sharpe" in filters and "sharpe" in df.columns:
+            df = df[df["sharpe"] >= filters["min_sharpe"]]
+
+    paths: list[str] = []
+    if slice_param and slice_param in df.columns:
+        slice_vals = sorted(df[slice_param].dropna().unique().tolist())
+        for val in slice_vals:
+            sub = df[df[slice_param] == val]
+            if sub.empty:
+                continue
+            save_path = None
+            if save_dir:
+                out = Path(save_dir)
+                out.mkdir(parents=True, exist_ok=True)
+                save_path = out / f"heatmap_{value_param}_{slice_param}_{val}.png"
+            fig = _plot_df(sub, str(save_path) if save_path else None)
+            if save_path:
+                paths.append(str(save_path))
+            else:
+                _ = fig
+        return paths
+
+    save_path = None
+    if save_dir:
+        out = Path(save_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        save_path = out / f"heatmap_{value_param}.png"
+    _plot_df(df, str(save_path) if save_path else None)
+    if save_path:
+        paths.append(str(save_path))
+    return paths

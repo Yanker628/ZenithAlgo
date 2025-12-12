@@ -56,18 +56,22 @@ def _calc_score(metrics: dict, weights: dict | None, low_trades_penalty: float =
 
 
 def _passes_filters(metrics: dict, filters: dict | None) -> bool:
+    return _filter_reason(metrics, filters) is None
+
+
+def _filter_reason(metrics: dict, filters: dict | None) -> str | None:
     if not filters:
-        return True
+        return None
     min_trades = filters.get("min_trades")
     if min_trades is not None and (metrics.get("total_trades", 0) or 0) < min_trades:
-        return False
+        return "min_trades"
     max_dd = filters.get("max_drawdown")
     if max_dd is not None and metrics.get("max_drawdown", 0) > max_dd:
-        return False
+        return "max_drawdown"
     min_sharpe = filters.get("min_sharpe")
     if min_sharpe is not None and metrics.get("sharpe", 0) < min_sharpe:
-        return False
-    return True
+        return "min_sharpe"
+    return None
 
 
 def _write_csv(path: Path, rows: Iterable[dict]) -> None:
@@ -154,10 +158,16 @@ def grid_search(
 
     combos = _product_dict(param_grid)
     results: list[SweepResult] = []
+    filter_stats: dict[str, int] = {"min_trades": 0, "max_drawdown": 0, "min_sharpe": 0, "passed": 0}
 
     for combo in combos:
         res = _run_single_combo(cfg_base, combo, objective_weights, filters, low_trades_penalty)
         results.append(res)
+        reason = _filter_reason(res.metrics, filters)
+        if reason is None:
+            filter_stats["passed"] += 1
+        else:
+            filter_stats[reason] = filter_stats.get(reason, 0) + 1
 
     out_path = _prepare_output_path(cfg.backtest, output_csv)
     rows = []
@@ -170,6 +180,14 @@ def grid_search(
         }
         rows.append(row)
     _write_csv(out_path, rows)
+    try:
+        stats_path = out_path.parent / f"{out_path.stem}_filter_stats.json"
+        stats_path.write_text(
+            __import__("json").dumps(filter_stats, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
     return results
 
 
@@ -194,9 +212,15 @@ def random_search(
         combos = random.sample(combos, n_samples)
 
     results: list[SweepResult] = []
+    filter_stats: dict[str, int] = {"min_trades": 0, "max_drawdown": 0, "min_sharpe": 0, "passed": 0}
     for combo in combos:
         res = _run_single_combo(cfg_base, combo, objective_weights, filters, low_trades_penalty)
         results.append(res)
+        reason = _filter_reason(res.metrics, filters)
+        if reason is None:
+            filter_stats["passed"] += 1
+        else:
+            filter_stats[reason] = filter_stats.get(reason, 0) + 1
 
     out_path = _prepare_output_path(cfg.backtest, output_csv, prefix="ma_sweep_random")
     rows = []
@@ -209,6 +233,14 @@ def random_search(
         }
         rows.append(row)
     _write_csv(out_path, rows)
+    try:
+        stats_path = out_path.parent / f"{out_path.stem}_filter_stats.json"
+        stats_path.write_text(
+            __import__("json").dumps(filter_stats, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
     return results
 
 

@@ -9,6 +9,7 @@ class Tick:
     symbol: str
     price: float
     ts: datetime
+    features: dict[str, float] | None = None
 
 @dataclass
 class Candle:

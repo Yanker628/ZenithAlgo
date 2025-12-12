@@ -10,6 +10,7 @@ from typing import Any
 
 from broker.base import Broker
 from market.models import OrderSignal
+from sizing.base import build_sizer
 
 
 def resolve_sizing_cfg(cfg) -> dict[str, Any]:
@@ -91,6 +92,7 @@ def size_signals(
     if not signals:
         return []
     cfg = sizing_cfg or {}
+    mode = str(cfg.get("type") or cfg.get("mode") or "").strip().lower()
     position_pct = cfg.get("position_pct")
     trade_notional = cfg.get("trade_notional")
     try:
@@ -103,6 +105,10 @@ def size_signals(
         trade_notional_f = None
 
     sized: list[OrderSignal] = []
+    typed_sizer = None
+    if mode:
+        typed_sizer = build_sizer(cfg)
+
     for sig in signals:
         price = sig.price
         if price is None or price <= 0:
@@ -116,6 +122,19 @@ def size_signals(
         base_qty = sig.qty if sig.qty and sig.qty > 0 else None
 
         if sig.side == "buy":
+            if typed_sizer is not None and mode:
+                max_qty = typed_sizer.max_buy_qty(price=price, current_qty=current_qty, equity_base=equity_base)
+                if max_qty <= 0:
+                    continue
+                if base_qty is None:
+                    base_qty = max_qty
+                target_qty = min(base_qty, max_qty)
+                if target_qty <= 0:
+                    continue
+                sig.qty = target_qty
+                sized.append(sig)
+                continue
+
             max_qty_pos = None
             if position_pct_f is not None:
                 max_qty_pos = _max_qty_by_position_pct(position_pct_f, equity_base, price, current_qty)
@@ -149,6 +168,19 @@ def size_signals(
             # 现货/纸面默认不做空：无持仓则忽略
             if current_qty <= 0:
                 continue
+            if typed_sizer is not None and mode:
+                max_qty = typed_sizer.max_sell_qty(price=price, current_qty=current_qty, equity_base=equity_base)
+                if base_qty is None:
+                    base_qty = current_qty
+                target_qty = min(base_qty, current_qty)
+                if max_qty > 0:
+                    target_qty = min(target_qty, max_qty)
+                if target_qty <= 0:
+                    continue
+                sig.qty = target_qty
+                sized.append(sig)
+                continue
+
             max_qty_trade = (
                 _max_qty_by_trade_notional(trade_notional_f, price)
                 if trade_notional_f is not None

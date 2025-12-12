@@ -11,15 +11,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict
 
+import pandas as pd
+
 from broker.backtest import BacktestBroker
-from market.models import OrderSignal
+from market.models import OrderSignal, Tick
+from factors.registry import apply_factors, build_factors
 from risk.manager import RiskManager
 from strategy.simple_ma import SimpleMAStrategy
 from utils.config_loader import load_config
 from utils.data_loader import HistoricalDataLoader
 from utils.logging import setup_logger
 from utils.pnl import compute_unrealized_pnl
-from utils.sizer import size_signals
+from utils.sizer import resolve_sizing_cfg, size_signals
 from utils.metrics import compute_metrics
 from utils.plotter import plot_drawdown, plot_equity_curve, plot_return_hist
 
@@ -53,7 +56,53 @@ def build_backtest_summary(broker: BacktestBroker, last_prices: Dict[str, float]
     }
 
 
-def run_backtest(cfg_path: str = "config/config.yml", cfg_obj=None):
+def _candles_to_frame(candles) -> pd.DataFrame:
+    rows = []
+    for c in candles:
+        rows.append(
+            {
+                "ts": c.end_ts,
+                "symbol": c.symbol,
+                "open": c.open,
+                "high": c.high,
+                "low": c.low,
+                "close": c.close,
+                "volume": c.volume,
+            }
+        )
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    return df.sort_values("ts").reset_index(drop=True)
+
+
+def _export_equity_csv(equity_curve: list[tuple[datetime, float]], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame(
+        [{"ts": ts.isoformat(), "equity": eq} for ts, eq in sorted(equity_curve, key=lambda x: x[0])]
+    )
+    df.to_csv(path, index=False)
+
+
+def _export_trades_csv(trades: list[dict], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for t in trades:
+        row = dict(t)
+        ts = row.get("ts")
+        if isinstance(ts, datetime):
+            row["ts"] = ts.isoformat()
+        rows.append(row)
+    df = pd.DataFrame(rows)
+    df.to_csv(path, index=False)
+
+
+def run_backtest(
+    cfg_path: str = "config/config.yml",
+    cfg_obj=None,
+    artifacts_dir: str | Path | None = None,
+    return_broker: bool = False,
+):
     """运行一次回测。
 
     Parameters
@@ -88,7 +137,31 @@ def run_backtest(cfg_path: str = "config/config.yml", cfg_obj=None):
         end=parse_iso(bt_cfg["end"]),
         auto_download=bool(bt_cfg.get("auto_download", False)),
     )
-    ticks = loader.candle_to_ticks(candles)
+    candles_df = _candles_to_frame(candles)
+    strat_cfg = bt_cfg.get("strategy", {}) if isinstance(bt_cfg, dict) else {}
+    short_feature = str(strat_cfg.get("short_feature", "ma_short"))
+    long_feature = str(strat_cfg.get("long_feature", "ma_long"))
+    # factors 配置：优先 backtest.factors；否则用 MA short/long 生成默认因子列
+    factors_cfg = bt_cfg.get("factors")
+    if not factors_cfg:
+        short_w = int(
+            bt_cfg.get("short_window")
+            or bt_cfg.get("strategy", {}).get("short_window")
+            or getattr(cfg.strategy, "short_window", 0)
+        )
+        long_w = int(
+            bt_cfg.get("long_window")
+            or bt_cfg.get("strategy", {}).get("long_window")
+            or getattr(cfg.strategy, "long_window", 0)
+        )
+        factors_cfg = [
+            {"name": "ma", "params": {"window": short_w, "price_col": "close", "out_col": short_feature}},
+            {"name": "ma", "params": {"window": long_w, "price_col": "close", "out_col": long_feature}},
+        ]
+    factors = build_factors(factors_cfg)
+    candles_df = apply_factors(candles_df, factors) if not candles_df.empty else candles_df
+    base_cols = {"ts", "symbol", "open", "high", "low", "close", "volume"}
+    feature_cols = [c for c in candles_df.columns if c not in base_cols]
 
     strat = SimpleMAStrategy(
         short_window=int(
@@ -111,6 +184,9 @@ def run_backtest(cfg_path: str = "config/config.yml", cfg_obj=None):
             or bt_cfg.get("strategy", {}).get("cooldown_secs", 0)
             or getattr(cfg.strategy, "cooldown_secs", 0)
         ),
+        short_feature=short_feature,
+        long_feature=long_feature,
+        require_features=True,
     )
     suppress_risk_logs = bool(bt_cfg.get("quiet_risk_logs", True)) if isinstance(bt_cfg, dict) else False
     # 回测可在 backtest.risk 中覆盖风控参数（如调高 max_daily_loss_pct）
@@ -130,12 +206,17 @@ def run_backtest(cfg_path: str = "config/config.yml", cfg_obj=None):
 
     last_prices: dict[str, float] = {}
     equity_base = float(bt_cfg.get("initial_equity", getattr(cfg, "equity_base", 0) or 0))
-    sizing_cfg = bt_cfg.get("sizing", {}) if isinstance(bt_cfg, dict) else {}
+    sizing_cfg = resolve_sizing_cfg(cfg)
 
     last_ts = None
     current_day = None
     day_start_equity = equity_base
-    for tick in ticks:
+    for _, row in candles_df.iterrows():
+        tick_ts = row["ts"]
+        tick_price = float(row["close"])
+        tick_symbol = str(row["symbol"])
+        features = {c: float(row[c]) for c in feature_cols if pd.notna(row[c])}
+        tick = Tick(symbol=tick_symbol, price=tick_price, ts=tick_ts, features=features or None)
         last_ts = tick.ts
         # 1) 跨日重置
         day = tick.ts.date()
@@ -203,27 +284,23 @@ def run_backtest(cfg_path: str = "config/config.yml", cfg_obj=None):
 
     summary = build_backtest_summary(broker, last_prices)
     summary["metrics"] = compute_metrics(broker.equity_curve, broker.trades)
-    # 绘图输出，允许跳过（用于批量/扫描）
-    skip_plots = bool(bt_cfg.get("skip_plots", False)) if isinstance(bt_cfg, dict) else False
-    if not skip_plots:
-        symbol = bt_cfg.get("symbol", cfg.symbol)
-        interval = bt_cfg.get("interval", cfg.timeframe)
-        run_ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-        plots_dir = Path("plots")
-        equity_path = plots_dir / f"{symbol}_{interval}_{run_ts}_equity.png"
-        drawdown_path = plots_dir / f"{symbol}_{interval}_{run_ts}_drawdown.png"
-        hist_path = plots_dir / f"{symbol}_{interval}_{run_ts}_return_hist.png"
-        try:
-            plot_equity_curve(broker.equity_curve, str(equity_path))
-            plot_drawdown(broker.equity_curve, str(drawdown_path))
-            plot_return_hist(broker.equity_curve, str(hist_path))
-            logger.info(
-                f"Saved plots: equity={equity_path}, drawdown={drawdown_path}, return_hist={hist_path}"
-            )
-        except Exception as exc:  # pragma: no cover
-            logger.warning(f"Plotting failed: {exc}")
+    # 实验产物（可选）
+    if artifacts_dir is not None:
+        out_dir = Path(artifacts_dir)
+        _export_trades_csv(broker.trades, out_dir / "trades.csv")
+        _export_equity_csv(broker.equity_curve, out_dir / "equity.csv")
+        skip_plots = bool(bt_cfg.get("skip_plots", False)) if isinstance(bt_cfg, dict) else False
+        if not skip_plots:
+            try:
+                plot_equity_curve(broker.equity_curve, str(out_dir / "equity.png"))
+                plot_drawdown(broker.equity_curve, str(out_dir / "drawdown.png"))
+                plot_return_hist(broker.equity_curve, str(out_dir / "return_hist.png"))
+            except Exception as exc:  # pragma: no cover
+                logger.warning(f"Plotting failed: {exc}")
 
     logger.info(f"Backtest summary: {summary}")
+    if return_broker:
+        return summary, broker
     return summary
 
 

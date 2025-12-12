@@ -15,3 +15,46 @@ exchange:
 risk:
   max_position_pct: 0.3 # 单个品种最大仓位占权益比例
   max_daily_loss_pct: 0.05 # 单日最大亏损 5%
+
+# 统一 sizing（runner/paper/live 优先使用；缺省则回退到 backtest.sizing）
+sizing:
+  type: "fixed_notional" # fixed_notional / pct_equity
+  trade_notional: 200
+
+backtest:
+  data_dir: "data/history"
+  symbol: "BTCUSDT"
+  interval: "1h"
+  start: "2024-01-01T00:00:00Z"
+  end: "2024-02-01T00:00:00Z"
+  initial_equity: 1000
+  auto_download: false
+  quiet_risk_logs: true
+  skip_plots: false
+
+  fees:
+    maker: 0.0002
+    taker: 0.0004
+    slippage_bp: 1.0
+
+  sizing:
+    type: "fixed_notional"
+    trade_notional: 200
+
+  # 因子（V2.3）：可在不改策略代码的情况下组合与调参
+  factors:
+    - name: "ma"
+      params: {window: 10, price_col: "close", out_col: "ma_short"}
+    - name: "ma"
+      params: {window: 50, price_col: "close", out_col: "ma_long"}
+    - name: "rsi"
+      params: {period: 14, price_col: "close", out_col: "rsi_14"}
+    - name: "atr"
+      params: {period: 14, out_col: "atr_14"}
+
+  strategy:
+    type: "simple_ma"
+    min_ma_diff: 0.0
+    cooldown_secs: 0
+    short_feature: "ma_short"
+    long_feature: "ma_long"

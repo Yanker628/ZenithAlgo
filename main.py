@@ -15,9 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from engine.runner import run_runner
-from engine.backtest_runner import run_backtest
-from engine.batch_backtest import batch_backtest
-from engine.walkforward import walk_forward
+from research.experiment import run_experiment
 
 
 @dataclass
@@ -117,16 +115,16 @@ def main(argv: list[str] | None = None) -> Any:
     if args.task == "runner":
         return run_runner(cfg_path=args.config, max_ticks=args.max_ticks)
     if args.task == "backtest":
-        return run_backtest(cfg_path=args.config)
+        return run_experiment(args.config, task="backtest")
     if args.task == "sweep":
-        return batch_backtest(cfg_path=args.config, top_n=args.top_n)
+        return run_experiment(args.config, task="sweep", top_n=args.top_n)
     if args.task == "walkforward":
-        return walk_forward(
-            cfg_path=args.config,
+        return run_experiment(
+            args.config,
+            task="walkforward",
             n_segments=args.n_segments,
             train_ratio=args.train_ratio,
             min_trades=args.min_trades,
-            output_dir=args.output_dir,
         )
 
     raise ValueError(f"Unknown task: {args.task}")
