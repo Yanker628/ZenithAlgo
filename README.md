@@ -34,7 +34,7 @@ ZenithAlgo/
 │   ├── backtest_runner.py    # 单次回测引擎
 │   ├── batch_backtest.py     # 批量回测/参数搜索
 │   └── walkforward.py        # Walk-Forward 验证
-├── factors/             # 因子/特征库（V2.3）
+├── factors/             # 因子/特征库
 │   ├── base.py
 │   ├── registry.py
 │   ├── ma.py
@@ -43,7 +43,7 @@ ZenithAlgo/
 ├── strategy/            # 策略模块
 │   ├── base.py          # 策略基类
 │   └── simple_ma.py     # 简单均线策略示例
-├── sizing/              # 仓位/下单量（V2.3）
+├── sizing/              # 仓位/下单量
 │   ├── base.py
 │   ├── fixed_notional.py
 │   └── pct_equity.py
@@ -64,7 +64,7 @@ ZenithAlgo/
 │   ├── param_search.py  # 参数搜索
 │   ├── plotter.py       # 可视化工具
 │   └── trade_logger.py  # 交易日志
-├── research/            # 实验与报告（V2.3）
+├── research/            # 实验与报告
 │   ├── experiment.py
 │   ├── report.py
 │   └── schemas.py
@@ -84,18 +84,21 @@ ZenithAlgo/
 ### 安装步骤
 
 1. **克隆仓库**
+
 ```bash
 git clone <your-repo-url>
 cd ZenithAlgo
 ```
 
 2. **创建虚拟环境**
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 ```
 
 3. **安装依赖**
+
 ```bash
 pip install -e .
 # 或使用 uv
@@ -103,6 +106,7 @@ uv pip install -e .
 ```
 
 4. **配置环境变量**
+
 ```bash
 # 创建 .env 文件（可选，程序会自动加载）
 export BINANCE_API_KEY="your_api_key"
@@ -110,6 +114,7 @@ export BINANCE_API_SECRET="your_api_secret"
 ```
 
 5. **配置系统**
+
 ```bash
 # 复制示例配置
 cp config/config.example.yml config/config.yml
@@ -121,6 +126,7 @@ cp config/config.example.yml config/config.yml
 推荐统一入口 `main.py`（旧的 `python -m engine.*` 仍兼容）。
 
 **实时交易（Paper Trading / Dry-run / Live）**
+
 ```bash
 python main.py runner --config config/config.yml
 # 不写子命令时默认 runner:
@@ -130,21 +136,25 @@ python main.py runner --max-ticks 200
 ```
 
 **单次回测**
+
 ```bash
 python main.py backtest --config config/config.yml
 ```
 
 兼容旧入口（模块方式），并支持指定产物目录：
+
 ```bash
 uv run python -m engine.backtest_runner --cfg config/config.yml --artifacts-dir data/experiments/_bt_oneoff
 ```
 
 **参数网格搜索**
+
 ```bash
 python main.py sweep --config config/config.yml
 ```
 
 **Walk-Forward 验证**
+
 ```bash
 python main.py walkforward --config config/config.yml
 ```
@@ -152,8 +162,17 @@ python main.py walkforward --config config/config.yml
 V2.3 起，`backtest/sweep/walkforward` 会把实验产物统一落盘到 `data/experiments/`（含 `results.json`、`report.md`、配置快照，以及回测的 `trades.csv/equity.csv` 等）。
 
 2.4-0 起，实验目录还会包含：
+
 - `summary.md`：快速抓重点（验收点）
 - sweep 可视化对任意参数维度（>=1）都能产出至少 1 张图：2D heatmap（>=2 维）/ 1D 曲线（=1 维）/ 参数重要性（兜底）
+- `meta.json`：实验元信息（含 `config_hash/data_hash/git.dirty`）
+- `summary.json`：标准化总结（`metrics/diagnostics/policy/artifacts`）
+
+Golden Backtest（最小可信回测）：
+
+```bash
+python -m tests.run_golden
+```
 
 ## 📚 使用指南
 
@@ -161,64 +180,71 @@ V2.3 起，`backtest/sweep/walkforward` 会把实验产物统一落盘到 `data/
 
 系统支持四种运行模式，通过 `config.yml` 中的 `mode` 字段配置：
 
-| 模式 | 行情源 | 交易执行 | 适用场景 |
-|------|--------|----------|----------|
-| `dry-run` | 模拟数据 | Mock Broker | 策略开发、快速测试 |
-| `paper` | 真实行情 | 纸面交易 | 策略验证、实盘前测试 |
-| `live-testnet` | 真实行情 | Testnet 下单 | 实盘接口测试 |
-| `live-mainnet` | 真实行情 | 真实下单 | **生产环境（需谨慎）** |
+| 模式           | 行情源   | 交易执行     | 适用场景               |
+| -------------- | -------- | ------------ | ---------------------- |
+| `dry-run`      | 模拟数据 | Mock Broker  | 策略开发、快速测试     |
+| `paper`        | 真实行情 | 纸面交易     | 策略验证、实盘前测试   |
+| `live-testnet` | 真实行情 | Testnet 下单 | 实盘接口测试           |
+| `live-mainnet` | 真实行情 | 真实下单     | **生产环境（需谨慎）** |
 
 说明：
+
 - `dry-run/paper/live-*` 当前按现货语义处理：`sell` 只会平掉已有持仓，不会产生负仓位（默认不做空）。
 
 ### 配置说明
 
 #### 基础配置
+
 ```yaml
-symbol: "BTCUSDT"          # 交易对
-timeframe: "1h"             # 时间周期
-mode: "paper"               # 运行模式
-equity_base: 10000          # 初始资金（用于计算百分比）
+symbol: "BTCUSDT" # 交易对
+timeframe: "1h" # 时间周期
+mode: "paper" # 运行模式
+equity_base: 10000 # 初始资金（用于计算百分比）
 ```
 
 #### 交易所配置
+
 ```yaml
 exchange:
   name: "binance"
   base_url: "https://api.binance.com"
   ws_url: "wss://stream.binance.com:9443/ws"
-  api_key: "${BINANCE_API_KEY}"      # 从环境变量读取
+  api_key: "${BINANCE_API_KEY}" # 从环境变量读取
   api_secret: "${BINANCE_API_SECRET}" # 从环境变量读取
-  allow_live: false                   # 安全保险丝
-  symbols_allowlist: ["BTCUSDT"]      # 交易白名单
+  allow_live: false # 安全保险丝
+  symbols_allowlist: ["BTCUSDT"] # 交易白名单
 ```
 
 #### 策略配置
+
 ```yaml
 strategy:
   type: "simple_ma"
-  short_window: 7           # 短期均线周期
-  long_window: 120          # 长期均线周期
-  min_ma_diff: 0.5          # 最小均线差值（去抖动）
-  cooldown_secs: 60         # 信号冷却时间（秒）
+  short_window: 7 # 短期均线周期
+  long_window: 120 # 长期均线周期
+  min_ma_diff: 0.5 # 最小均线差值（去抖动）
+  cooldown_secs: 60 # 信号冷却时间（秒）
 ```
 
 #### 风控配置
+
 ```yaml
 risk:
-  max_position_pct: 0.3      # 最大仓位比例（30%）
-  max_daily_loss_pct: 0.05   # 单日最大亏损（5%）
+  max_position_pct: 0.3 # 最大仓位比例（30%）
+  max_daily_loss_pct: 0.05 # 单日最大亏损（5%）
 ```
 
 #### 下单规模配置（runner/paper/live）
+
 ```yaml
 sizing:
-  position_pct: 0.2          # 单品种最大持仓占 equity_base 比例
-  trade_notional: 200        # 单笔最大名义
+  position_pct: 0.2 # 单品种最大持仓占 equity_base 比例
+  trade_notional: 200 # 单笔最大名义
 # runner/paper 会优先使用该 sizing；若缺省则复用 backtest.sizing
 ```
 
 #### 回测配置
+
 ```yaml
 backtest:
   data_dir: "data/history"
@@ -227,27 +253,28 @@ backtest:
   start: "2021-01-01T00:00:00Z"
   end: "2024-12-01T00:00:00Z"
   initial_equity: 1000
-  auto_download: true        # 自动下载缺失数据
-  
+  auto_download: true # 自动下载缺失数据
+  record_equity_each_bar: false # true=逐bar MTM（更真实），false=仅成交点（更快）
+
   fees:
-    maker: 0.0002            # Maker 手续费 0.02%
-    taker: 0.0004            # Taker 手续费 0.04%
-    slippage_bp: 1.0         # 滑点 1bp
-    
+    maker: 0.0002 # Maker 手续费 0.02%
+    taker: 0.0004 # Taker 手续费 0.04%
+    slippage_bp: 1.0 # 滑点 1bp
+
   sizing:
-    position_pct: 0.2         # 最大持仓比例
-    trade_notional: 200       # 单笔最大名义价值
+    position_pct: 0.2 # 最大持仓比例
+    trade_notional: 200 # 单笔最大名义价值
 
   # 因子（V2.3）：策略只读取列名，不再在策略内硬编码指标计算
   factors:
     - name: "ma"
-      params: {window: 10, price_col: "close", out_col: "ma_short"}
+      params: { window: 10, price_col: "close", out_col: "ma_short" }
     - name: "ma"
-      params: {window: 50, price_col: "close", out_col: "ma_long"}
+      params: { window: 50, price_col: "close", out_col: "ma_long" }
     - name: "rsi"
-      params: {period: 14, price_col: "close", out_col: "rsi_14"}
+      params: { period: 14, price_col: "close", out_col: "rsi_14" }
     - name: "atr"
-      params: {period: 14, out_col: "atr_14"}
+      params: { period: 14, out_col: "atr_14" }
 
   # 回测策略（可选）：若你修改因子输出列名，可在这里改 short_feature/long_feature
   strategy:
@@ -273,23 +300,27 @@ class MyStrategy(Strategy):
 ```
 
 策略 qty 约定：
+
 - `qty <= 0`：表示“方向信号”，由 `sizing` 计算真实数量（runner/paper/backtest 共用）。
 - `qty > 0`：表示策略希望的目标数量，但仍会被 `sizing`/`risk` 裁剪到上限。
 
 ### 回测与优化
 
 **单次回测**
+
 - 修改 `config.yml` 中的 `backtest` 配置
 - 运行 `python main.py backtest --config config/config.yml`
 - 结果输出到控制台和 `data/trades/` 目录
 - 回测中若现金不足会自动缩量成交，日志/指标记录的是“真实成交量”。
 
 **参数搜索**
+
 - 在 `backtest.sweep` 中配置参数网格
 - 运行 `python main.py sweep --config config/config.yml`
 - 结果保存到 `data/research/ma_sweep_*.csv`
 
 **最优参数生成**
+
 ```bash
 python -m utils.best_params \
   --cfg config/config.yml \
@@ -299,6 +330,7 @@ python -m utils.best_params \
 ```
 
 **可视化**
+
 ```python
 from utils.plotter import plot_equity_curve, plot_drawdown
 # 自动生成图表到 plots/ 目录
@@ -307,11 +339,13 @@ from utils.plotter import plot_equity_curve, plot_drawdown
 ## 🔒 安全建议
 
 1. **API 密钥管理**
+
    - ✅ 使用环境变量，不要硬编码
    - ✅ 配置文件使用占位符 `${BINANCE_API_KEY}`
    - ✅ 本地配置文件（`config.local.yml`）已加入 `.gitignore`
 
 2. **实盘交易保护**
+
    - ✅ `allow_live: false` 默认阻断真实下单
    - ✅ 使用 `symbols_allowlist` 限制交易品种
    - ✅ 设置合理的 `min_notional` 和 `min_qty`
@@ -325,6 +359,7 @@ from utils.plotter import plot_equity_curve, plot_drawdown
 ## 🧪 测试
 
 运行测试套件：
+
 ```bash
 # 所有测试
 pytest
@@ -375,34 +410,40 @@ LIVE_TESTS=1 pytest -m live
 ## 📝 更新日志
 
 ### V2.2 (当前版本)
+
 - ✅ Walk-Forward 验证支持
 - ✅ 参数搜索可视化（热力图）
 - ✅ 自动最优参数生成
 - ✅ 回测结果可视化增强
 
 ### V2.1
+
 - ✅ 参数网格搜索
 - ✅ 手续费和滑点模拟
 - ✅ 多品种回测支持
 
 ### V2.0
+
 - ✅ 离线回测引擎
 - ✅ 历史数据自动下载
 - ✅ 回测绩效指标计算
 
 ### V1.2
+
 - ✅ 策略去抖动
 - ✅ 交易记录持久化
 - ✅ PnL 结构优化
 - ✅ 日内重置机制
 
 ### V1.1
+
 - ✅ 真实交易所行情
 - ✅ Binance Broker 实现
 - ✅ 运行模式支持
 - ✅ 安全与配置管理
 
 ### V1.0
+
 - ✅ 事件驱动框架
 - ✅ 基础策略实现
 - ✅ 风控模块

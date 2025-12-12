@@ -193,6 +193,7 @@ V2 只专注几件事：
 > 目标：让研究产物结构化、可复现、可读（不再“能跑但抓不住重点”）。
 
 验收点（已实现）：
+
 - sweep（任意策略/任意参数维度>=1）必产出 `summary.md` 与至少 1 张图（2D heatmap / 1D 曲线 / 参数重要性兜底）
 - `report.md` 首页固定输出：data health / trade health / 核心绩效 / 稳定性结论
 - walk-forward overall 额外输出：`profitable_segments_ratio` / `worst_segment_return` / `median_return`
@@ -595,3 +596,270 @@ ZenithAlgo/
 5. 最后搞热力图增强（M5）
 
 > 先解耦，再优化策略，效率会陡增；否则就是在“泥地里装涡轮增压”。
+
+# ROADMAP_V2_4
+
+## 实验系统工程化（可复现 / 可解释 / 可验证）
+
+> **版本目标**  
+> 将当前 ZenithAlgo 从「能跑回测 / sweep / walkforward」  
+> 提升为一个 **结果可信、实验可复现、问题可定位** 的研究平台。
+>
+> **V2.4 不是策略版本，是系统稳定性版本。**
+
+---
+
+## 一、V2.4 的版本定位
+
+### 为什么需要 V2.4？
+
+当前系统已经具备：
+
+- 因子 / 策略模块化
+- sweep 参数搜索
+- walk-forward 验证
+- 指标体系初步完整
+
+但仍然存在：
+
+- 回测结果很多，但**难以判断是否可信**
+- 相同实验**难以保证可复现**
+- 不清楚是**策略无效**还是**系统实现有问题**
+- 输出数据过多，**抓不住关键结论**
+
+**V2.4 的核心目标：**
+
+> 把系统变成一台“可靠的科研仪器”，  
+> 而不是一堆会跑的脚本。
+
+---
+
+## 二、V2.4 核心交付物（Deliverables）
+
+---
+
+## D1. 实验可复现机制（Reproducibility）
+
+### 目标
+
+同一份：
+
+- 代码
+- 配置
+- 数据
+
+多次运行 → **结果高度一致（允许浮点误差）**
+
+---
+
+### 实现要求
+
+所有 backtest / sweep / walkforward 实验 **必须自动生成**：
+meta.json
+summary.json
+
+---
+
+### meta.json（强制字段）
+
+```json
+{
+  "task": "backtest | sweep | walkforward",
+  "symbol": "BTCUSDT",
+  "interval": "1h",
+  "start": "2021-01-01T00:00:00Z",
+  "end": "2024-01-01T00:00:00Z",
+  "run_ts": "2025-12-12T15:00:00Z",
+  "git": {
+    "sha": "xxxx",
+    "dirty": true
+  },
+  "config_hash": "xxxx",
+  "data_hash": "xxxx"
+}
+```
+
+说明
+
+config_hash：配置文件内容 hash
+
+data_hash：历史数据文件 hash（防止数据被悄悄修改）
+
+dirty=true：代码未提交，结果只能用于探索
+
+规则
+
+没有 meta.json 的结果一律视为无效
+
+dirty=true 的结果 禁止进入正式对比
+
+sweep / walkforward 的子实验必须继承 meta
+
+验收标准（D1）
+
+同一实验连续运行两次：
+
+summary 指标误差 < 1e-6
+
+dirty=false + 相同 hash：
+
+结果完全一致
+
+D2. 指标体系标准化（Metrics Canonicalization）
+目标
+
+全系统指标口径统一，语义唯一
+
+强制规范
+指标名 规范
+total_return final_equity / initial_equity - 1
+max_drawdown 正数，表示最大回撤比例
+sharpe 明确基于 trade returns 或 equity returns
+profit_factor gross_win / gross_loss
+win_rate winning_trades / total_trades
+禁止行为
+
+同名指标不同算法
+
+有的地方 dd 为负，有的为正
+
+sweep / walkforward / backtest 输出字段不一致
+
+验收标准（D2）
+
+backtest / sweep / walkforward：
+
+输出字段完全一致
+
+summary.json 可通过 schema 校验
+
+D3. 诊断（Diagnostics）与决策（Policy）解耦
+目标
+
+明确区分两件事：
+
+发生了什么（诊断）
+
+我是否接受它（决策）
+
+输出结构示例
+{
+"metrics": {...},
+"diagnostics": {
+"low_trades": true,
+"low_exposure": true,
+"unstable_sharpe": false,
+"fee_dominated": false
+},
+"policy": {
+"passed": false,
+"stage": "research",
+"reasons": ["low_trades"]
+}
+}
+
+设计原则
+
+diagnostics 只负责描述，不做淘汰
+
+policy 才负责筛选（允许多套 policy）
+
+sweep / walkforward 不再“悄悄过滤”
+
+walkforward 额外输出
+{
+"overall": {
+"profitable_segments_ratio": 0.66,
+"worst_segment_return": -0.01,
+"median_return": 0.015,
+"final_decision": "reject",
+"reasons": ["unstable_segments"]
+}
+}
+
+验收标准（D3）
+
+所有实验结果可回答：
+
+为什么被拒绝？
+
+如果放宽条件会发生什么？
+
+D4. Golden Backtest（最小可信回测）
+
+V2.4 最重要的工程基石
+
+四、Golden Backtest 设计模板
+1️⃣ Golden 数据选取原则
+
+不随机
+
+不太长
+
+易人工验证
+
+推荐
+
+BTCUSDT 1h
+
+200–300 根 K 线
+
+至少 3–5 笔交易
+
+包含趋势 + 回撤
+
+data/golden/BTCUSDT_1h.csv
+
+2️⃣ Golden 配置
+config/golden_backtest.yml
+
+要求：
+
+禁止 sweep
+
+禁止 walkforward
+
+固定策略参数
+
+固定手续费 / 滑点
+
+flatten_on_end = true
+
+3️⃣ Golden 结果固化
+
+首次确认后，固化：
+
+tests/golden/golden_summary.json
+
+示例：
+
+{
+"total_return": 0.02341,
+"max_drawdown": 0.01233,
+"total_trades": 7,
+"profit_factor": 1.42
+}
+
+4️⃣ Golden 校验命令
+python -m tests.run_golden
+
+校验内容：
+
+指标字段齐全
+
+数值误差 < tolerance
+
+trade 数量一致
+
+Golden 规则
+修改内容 Golden 是否允许变化
+策略逻辑 允许（需人工确认）
+回测引擎 / 风控 / 费用 ❌ 不允许
+指标计算 ❌ 不允许
+验收标准（D4）
+
+golden 可一键运行
+
+结果稳定
+
+CI / 本地均可执行
