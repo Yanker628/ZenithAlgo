@@ -94,7 +94,8 @@ def write_report_md(path: Path, *, task: str, meta: dict[str, Any], summary: Any
     if task == "backtest" and isinstance(summary, dict):
         metrics = dict(summary.get("metrics", {}) or {})
     elif task == "walkforward" and isinstance(summary, dict):
-        metrics = dict((summary.get("overall") or {}) if isinstance(summary.get("overall"), dict) else {})
+        overall = summary.get("overall") if isinstance(summary.get("overall"), dict) else {}
+        metrics = dict(overall) if isinstance(overall, dict) else {}
     elif task == "sweep" and isinstance(summary, dict):
         # sweep 首页用每个 symbol 的 best_backtest 指标（若多 symbol，展示第一个作为概览）
         symbols = summary.get("symbols") if isinstance(summary.get("symbols"), dict) else {}

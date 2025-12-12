@@ -23,6 +23,11 @@ from typing import Any
 
 from engine.backtest_runner import run_backtest
 from engine.walkforward import walk_forward
+from utils.diagnostics import compute_diagnostics
+from utils.hashing import sha256_files, sha256_text
+from utils.json_sanitize import sanitize_for_json
+from utils.metrics_canon import canonicalize_metrics, validate_metrics_schema
+from utils.policy import evaluate_policy
 from utils.config_loader import load_config
 from utils.logging import setup_logger
 from utils.param_search import grid_search, random_search
@@ -32,6 +37,10 @@ from research.report import write_report_md, write_summary_md
 
 def _utc_ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+
+
+def _utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _git_info() -> dict[str, Any]:
@@ -53,6 +62,81 @@ def _git_info() -> dict[str, Any]:
     except Exception:
         dirty = None
     return {"sha": sha, "dirty": dirty}
+
+
+def _config_hash(cfg_path: str) -> str:
+    return sha256_text(Path(cfg_path).read_text(encoding="utf-8"))
+
+
+def _data_hashes(cfg_obj, *, symbols: list[str]) -> tuple[str, dict[str, str]]:
+    bt_cfg = getattr(cfg_obj, "backtest", None) or {}
+    data_dir = str(bt_cfg.get("data_dir", "data/history"))
+    interval = str(bt_cfg.get("interval", getattr(cfg_obj, "timeframe", "")))
+    paths = [Path(data_dir) / f"{s}_{interval}.csv" for s in symbols]
+    return sha256_files(paths)
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = sanitize_for_json(payload)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str, allow_nan=False), encoding="utf-8")
+
+
+def _write_meta_json(
+    out_dir: Path,
+    *,
+    task: str,
+    symbol: str,
+    interval: str,
+    start: str | None,
+    end: str | None,
+    run_ts: str,
+    git: dict[str, Any],
+    config_hash: str,
+    data_hash: str,
+    data_hashes: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "task": task,
+        "symbol": symbol,
+        "interval": interval,
+        "start": start,
+        "end": end,
+        "run_ts": run_ts,
+        "git": git,
+        "config_hash": config_hash,
+        "data_hash": data_hash,
+    }
+    if data_hashes:
+        payload["data_hashes"] = data_hashes
+    _write_json(out_dir / "meta.json", payload)
+    return payload
+
+
+def _write_summary_json(
+    out_dir: Path,
+    *,
+    task: str,
+    metrics: dict[str, Any],
+    diagnostics: dict[str, Any],
+    policy: dict[str, Any],
+    artifacts: dict[str, Any],
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    metrics = canonicalize_metrics(metrics)
+    validate_metrics_schema(metrics)
+    payload: dict[str, Any] = {
+        "task": task,
+        "metrics": metrics,
+        "diagnostics": diagnostics,
+        "policy": policy,
+        "artifacts": artifacts,
+        "metrics_spec": {"sharpe": "equity_returns"},
+    }
+    if details is not None:
+        payload["details"] = details
+    _write_json(out_dir / "summary.json", payload)
+    return payload
 
 
 def _dump_effective_cfg(cfg_obj, path: Path) -> None:
@@ -132,8 +216,8 @@ def _experiment_dir(task: str, meta: dict[str, Any]) -> Path:
     interval = str(meta.get("interval") or "NA")
     start = str(meta.get("start") or "NA")
     end = str(meta.get("end") or "NA")
-    run_ts = str(meta.get("run_ts") or _utc_ts())
-    return Path("data/experiments") / task / symbol / interval / f"{start}_{end}" / run_ts
+    run_id = str(meta.get("run_id") or meta.get("run_ts") or _utc_ts())
+    return Path("data/experiments") / task / symbol / interval / f"{start}_{end}" / run_id
 
 
 @dataclass(frozen=True)
@@ -148,18 +232,21 @@ def run_backtest_experiment(cfg_path: str) -> ExperimentResult:
     logger = setup_logger("experiment")
     cfg = load_config(cfg_path, load_env=False, expand_env=False)
     bt_cfg = cfg.backtest or {}
+    run_id = _utc_ts()
+    run_ts = _utc_iso()
     meta = {
         "symbol": bt_cfg.get("symbol", cfg.symbol),
         "interval": bt_cfg.get("interval", cfg.timeframe),
         "start": bt_cfg.get("start"),
         "end": bt_cfg.get("end"),
-        "run_ts": _utc_ts(),
+        "run_id": run_id,
+        "run_ts": run_ts,
         "git": _git_info(),
     }
     out_dir = _experiment_dir("backtest", meta)
     _ensure_config_snapshot(cfg_path, out_dir)
     summary = run_backtest(cfg_obj=cfg, artifacts_dir=out_dir)
-    metrics = summary.get("metrics", {}) # type: ignore
+    metrics = canonicalize_metrics(summary.get("metrics", {}) if isinstance(summary, dict) else {})
     artifacts = {
         "dir": str(out_dir),
         "trades_csv": "trades.csv",
@@ -168,9 +255,34 @@ def run_backtest_experiment(cfg_path: str) -> ExperimentResult:
         "drawdown_png": "drawdown.png",
         "return_hist_png": "return_hist.png",
     }
-    (out_dir / "results.json").write_text(
-        json.dumps({"task": "backtest", "meta": meta, "summary": summary, "artifacts": artifacts}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+    cfg_hash = _config_hash(cfg_path)
+    data_hash, data_hashes = _data_hashes(cfg, symbols=[str(meta["symbol"])])
+    meta_json = _write_meta_json(
+        out_dir,
+        task="backtest",
+        symbol=str(meta["symbol"]),
+        interval=str(meta["interval"]),
+        start=meta.get("start"),
+        end=meta.get("end"),
+        run_ts=run_ts,
+        git=meta["git"],
+        config_hash=cfg_hash,
+        data_hash=data_hash,
+        data_hashes=data_hashes,
+    )
+    diagnostics = compute_diagnostics(metrics)
+    policy = evaluate_policy(metrics, policy_cfg=None, stage="research", git_dirty=bool(meta["git"].get("dirty")))
+    summary_json = _write_summary_json(
+        out_dir,
+        task="backtest",
+        metrics=metrics,
+        diagnostics=diagnostics,
+        policy=policy,
+        artifacts=artifacts,
+    )
+    _write_json(
+        out_dir / "results.json",
+        {"task": "backtest", "meta": meta, "meta_json": meta_json, "summary": summary, "summary_json": summary_json, "artifacts": artifacts},
     )
     write_report_md(out_dir / "report.md", task="backtest", meta=meta, summary=summary, artifacts=artifacts)
     write_summary_md(out_dir / "summary.md", task="backtest", meta=meta, metrics=metrics, plots=[str(out_dir / "equity.png")])
@@ -183,12 +295,15 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
     cfg = load_config(cfg_path, load_env=False, expand_env=False)
     bt_cfg = cfg.backtest or {}
     sweep_cfg = (bt_cfg.get("sweep") or {}) if isinstance(bt_cfg, dict) else {}
+    run_id = _utc_ts()
+    run_ts = _utc_iso()
     meta = {
         "symbol": bt_cfg.get("symbol", cfg.symbol),
         "interval": bt_cfg.get("interval", cfg.timeframe),
         "start": bt_cfg.get("start"),
         "end": bt_cfg.get("end"),
-        "run_ts": _utc_ts(),
+        "run_id": run_id,
+        "run_ts": run_ts,
         "git": _git_info(),
     }
     out_dir = _experiment_dir("sweep", meta)
@@ -340,7 +455,9 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
             except Exception as exc:
                 logger.warning("Plot importance failed (symbol=%s): %s", sym, exc)
 
-        best = sorted(results, key=lambda r: r.score, reverse=True)[: max(1, int(top_n))]
+        passed = [r for r in results if getattr(r, "passed", True)]
+        pool = passed if passed else results
+        best = sorted(pool, key=lambda r: r.score, reverse=True)[: max(1, int(top_n))]
         best_params = best[0].params if best else {}
 
         # 用最佳参数跑一次 backtest，生成 trades/equity/report
@@ -352,6 +469,7 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
         cfg_best.backtest["strategy"] = bt_strategy  # type: ignore[index]
         cfg_best.backtest["skip_plots"] = False  # type: ignore[index]
         bt_summary = run_backtest(cfg_obj=cfg_best, artifacts_dir=best_bt_dir)
+        bt_metrics = canonicalize_metrics(bt_summary.get("metrics", {}) if isinstance(bt_summary, dict) else {})
 
         all_results[sym] = {
             "sweep_csv": str(sweep_csv),
@@ -361,23 +479,132 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
             "heatmaps_dir": str(heatmaps_dir) if heatmaps_dir.exists() else None,
             "plots": plots,
             "viz": viz,
-            "top": [{"params": r.params, "metrics": r.metrics, "score": r.score} for r in best],
+            "top": [
+                {
+                    "params": r.params,
+                    "metrics": r.metrics,
+                    "score": r.score,
+                    "passed": getattr(r, "passed", True),
+                    "filter_reason": getattr(r, "filter_reason", None),
+                }
+                for r in best
+            ],
             "best_params": best_params,
             "best_backtest": {
                 "dir": str(best_bt_dir),
-                "metrics": bt_summary.get("metrics", {}),  # type: ignore
+                "metrics": bt_metrics,
                 "data_health": bt_summary.get("data_health", {}),  # type: ignore
             },
+            "policy": {"filters": filters, "passed_any": bool(passed)},
         }
 
+        # best_backtest 子实验 meta/summary（继承父 meta）
+        try:
+            cfg_hash = _config_hash(cfg_path)
+            dh, dhs = _data_hashes(cfg, symbols=[sym])
+            _write_meta_json(
+                best_bt_dir,
+                task="backtest",
+                symbol=sym,
+                interval=str(meta["interval"]),
+                start=meta.get("start"),
+                end=meta.get("end"),
+                run_ts=run_ts,
+                git=meta["git"],
+                config_hash=cfg_hash,
+                data_hash=dh,
+                data_hashes=dhs,
+            )
+            _write_summary_json(
+                best_bt_dir,
+                task="backtest",
+                metrics=bt_metrics,
+                diagnostics=compute_diagnostics(bt_metrics),
+                policy=evaluate_policy(
+                    bt_metrics,
+                    policy_cfg=(filters if isinstance(filters, dict) else None),
+                    stage="research",
+                    git_dirty=bool(meta["git"].get("dirty")),
+                ),
+                artifacts={"dir": str(best_bt_dir), "trades_csv": "trades.csv", "equity_csv": "equity.csv"},
+                details={"parent": str(sym_dir / "meta.json")},
+            )
+        except Exception:
+            pass
+
+        # 子实验 meta（继承父 meta）
+        try:
+            cfg_hash = _config_hash(cfg_path)
+            dh, dhs = _data_hashes(cfg, symbols=[sym])
+            _write_meta_json(
+                sym_dir,
+                task="sweep",
+                symbol=sym,
+                interval=str(meta["interval"]),
+                start=meta.get("start"),
+                end=meta.get("end"),
+                run_ts=run_ts,
+                git=meta["git"],
+                config_hash=cfg_hash,
+                data_hash=dh,
+                data_hashes=dhs,
+            )
+            _write_summary_json(
+                sym_dir,
+                task="sweep",
+                metrics=bt_metrics,
+                diagnostics=compute_diagnostics(bt_metrics),
+                policy=evaluate_policy(
+                    bt_metrics,
+                    policy_cfg=(filters if isinstance(filters, dict) else None),
+                    stage="research",
+                    git_dirty=bool(meta["git"].get("dirty")),
+                ),
+                artifacts={"dir": str(sym_dir), "sweep_csv": str(sweep_csv), "best_backtest_dir": str(best_bt_dir)},
+                details={"symbol": sym, "top": all_results[sym].get("top"), "viz": viz},
+            )
+        except Exception:
+            pass
+
+    cfg_hash = _config_hash(cfg_path)
+    data_hash, data_hashes = _data_hashes(cfg, symbols=symbols)
+    meta_json = _write_meta_json(
+        out_dir,
+        task="sweep",
+        symbol=str(meta["symbol"]),
+        interval=str(meta["interval"]),
+        start=meta.get("start"),
+        end=meta.get("end"),
+        run_ts=run_ts,
+        git=meta["git"],
+        config_hash=cfg_hash,
+        data_hash=data_hash,
+        data_hashes=data_hashes,
+    )
     payload = {"task": "sweep", "meta": meta, "symbols": all_results}
-    (out_dir / "results.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    write_report_md(out_dir / "report.md", task="sweep", meta=meta, summary=payload, artifacts={"dir": str(out_dir)})
-    # summary：取第一个 symbol 的 best_backtest 作为概览
+    # sweep 总体 summary：用第一个 symbol 的 best_backtest 作为 metrics 概览
     first_sym = next(iter(all_results.values()), {}) if all_results else {}
     bb = first_sym.get("best_backtest") if isinstance(first_sym, dict) else {}
-    metrics = dict(bb.get("metrics", {}) or {}) if isinstance(bb, dict) else {}
-    plots = first_sym.get("plots") if isinstance(first_sym, dict) else None # type: ignore
+    metrics = canonicalize_metrics(dict(bb.get("metrics", {}) or {}) if isinstance(bb, dict) else {})
+    diagnostics = compute_diagnostics(metrics)
+    policy_cfg = sweep_cfg.get("filters") or {
+        "min_trades": sweep_cfg.get("min_trades"),
+        "max_drawdown": sweep_cfg.get("max_drawdown"),
+        "min_sharpe": sweep_cfg.get("min_sharpe"),
+    }
+    policy = evaluate_policy(metrics, policy_cfg=policy_cfg if isinstance(policy_cfg, dict) else None, stage="research", git_dirty=bool(meta["git"].get("dirty")))
+    summary_json = _write_summary_json(
+        out_dir,
+        task="sweep",
+        metrics=metrics,
+        diagnostics=diagnostics,
+        policy=policy,
+        artifacts={"dir": str(out_dir)},
+        details={"symbols": all_results},
+    )
+    _write_json(out_dir / "results.json", {"task": "sweep", "meta": meta, "meta_json": meta_json, "summary_json": summary_json, "symbols": all_results})
+    write_report_md(out_dir / "report.md", task="sweep", meta=meta, summary=payload, artifacts={"dir": str(out_dir)})
+    plots = first_sym.get("plots") if isinstance(first_sym, dict) else None  # type: ignore
     write_summary_md(out_dir / "summary.md", task="sweep", meta=meta, metrics=metrics, plots=plots if isinstance(plots, list) else None)
     logger.info("Experiment saved: %s", out_dir)
     return ExperimentResult(task="sweep", meta=meta, metrics=None, artifacts={"dir": str(out_dir)})
@@ -392,12 +619,15 @@ def run_walkforward_experiment(
     logger = setup_logger("experiment")
     cfg = load_config(cfg_path, load_env=False, expand_env=False)
     bt_cfg = cfg.backtest or {}
+    run_id = _utc_ts()
+    run_ts = _utc_iso()
     meta = {
         "symbol": bt_cfg.get("symbol", cfg.symbol),
         "interval": bt_cfg.get("interval", cfg.timeframe),
         "start": bt_cfg.get("start"),
         "end": bt_cfg.get("end"),
-        "run_ts": _utc_ts(),
+        "run_id": run_id,
+        "run_ts": run_ts,
         "git": _git_info(),
         "n_segments": n_segments,
         "train_ratio": train_ratio,
@@ -415,15 +645,73 @@ def run_walkforward_experiment(
         output_dir=str(out_dir / "segments"),
         artifacts_base_dir=str(out_dir / "segments"),
     )
-    (out_dir / "results.json").write_text(
-        json.dumps({"task": "walkforward", "meta": meta, "results": res}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+    cfg_hash = _config_hash(cfg_path)
+    data_hash, data_hashes = _data_hashes(cfg, symbols=[str(meta["symbol"])])
+    meta_json = _write_meta_json(
+        out_dir,
+        task="walkforward",
+        symbol=str(meta["symbol"]),
+        interval=str(meta["interval"]),
+        start=meta.get("start"),
+        end=meta.get("end"),
+        run_ts=run_ts,
+        git=meta["git"],
+        config_hash=cfg_hash,
+        data_hash=data_hash,
+        data_hashes=data_hashes,
     )
-    write_report_md(out_dir / "report.md", task="walkforward", meta=meta, summary=res, artifacts={"dir": str(out_dir)})
     overall = res.get("overall") if isinstance(res, dict) else {}
-    write_summary_md(out_dir / "summary.md", task="walkforward", meta=meta, metrics=overall if isinstance(overall, dict) else {})
+    overall_metrics = canonicalize_metrics(overall if isinstance(overall, dict) else {})
+    diagnostics = compute_diagnostics(overall_metrics)
+    policy = evaluate_policy(overall_metrics, policy_cfg=None, stage="research", git_dirty=bool(meta["git"].get("dirty")))
+    try:
+        segments = res.get("segments") if isinstance(res, dict) else None
+        if isinstance(segments, list):
+            for i, seg in enumerate(segments, 1):
+                if not isinstance(seg, dict):
+                    continue
+                seg_metrics = canonicalize_metrics(seg.get("metrics", {}) if isinstance(seg.get("metrics"), dict) else {})
+                seg_art_dir = seg.get("artifacts_dir")
+                if isinstance(seg_art_dir, str) and seg_art_dir:
+                    p = Path(seg_art_dir)
+                    _write_meta_json(
+                        p,
+                        task="backtest",
+                        symbol=str(meta["symbol"]),
+                        interval=str(meta["interval"]),
+                        start=str((seg.get("test") or [None, None])[0]),
+                        end=str((seg.get("test") or [None, None])[1]),
+                        run_ts=run_ts,
+                        git=meta["git"],
+                        config_hash=cfg_hash,
+                        data_hash=data_hash,
+                        data_hashes=data_hashes,
+                    )
+                    _write_summary_json(
+                        p,
+                        task="backtest",
+                        metrics=seg_metrics,
+                        diagnostics=compute_diagnostics(seg_metrics),
+                        policy=evaluate_policy(seg_metrics, policy_cfg=None, stage="research", git_dirty=bool(meta["git"].get("dirty"))),
+                        artifacts={"dir": str(p), "trades_csv": "trades.csv", "equity_csv": "equity.csv"},
+                        details={"parent": str(out_dir / "meta.json"), "segment_idx": i, "train": seg.get("train"), "test": seg.get("test")},
+                    )
+    except Exception:
+        pass
+    summary_json = _write_summary_json(
+        out_dir,
+        task="walkforward",
+        metrics=overall_metrics,
+        diagnostics=diagnostics,
+        policy=policy,
+        artifacts={"dir": str(out_dir)},
+        details={"results": res},
+    )
+    _write_json(out_dir / "results.json", {"task": "walkforward", "meta": meta, "meta_json": meta_json, "summary_json": summary_json, "results": res})
+    write_report_md(out_dir / "report.md", task="walkforward", meta=meta, summary=res, artifacts={"dir": str(out_dir)})
+    write_summary_md(out_dir / "summary.md", task="walkforward", meta=meta, metrics=overall_metrics)
     logger.info("Experiment saved: %s", out_dir)
-    return ExperimentResult(task="walkforward", meta=meta, metrics=res.get("overall"), artifacts={"dir": str(out_dir)})
+    return ExperimentResult(task="walkforward", meta=meta, metrics=overall_metrics, artifacts={"dir": str(out_dir)})
 
 
 def run_experiment(cfg_path: str, task: str, **kwargs) -> ExperimentResult:
