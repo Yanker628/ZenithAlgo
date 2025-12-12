@@ -1,3 +1,5 @@
+"""交易日志持久化（CSV 日切）。"""
+
 import csv
 import _csv
 from dataclasses import dataclass
@@ -8,6 +10,7 @@ from typing import Any, Optional, TextIO
 
 @dataclass
 class TradeRecord:
+    """单笔交易记录。"""
     ts: Any
     symbol: str
     side: str
@@ -20,6 +23,14 @@ class TradeRecord:
 
 
 class TradeLogger:
+    """按日切 CSV 记录交易。
+
+    Parameters
+    ----------
+    base_dir:
+        输出目录。
+    """
+
     def __init__(self, base_dir: str | Path = "data/trades"):
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
@@ -56,6 +67,7 @@ class TradeLogger:
             )
 
     def log(self, record: TradeRecord):
+        """写入一条交易记录。"""
         self._ensure_file()
         ts = record.ts
         if isinstance(ts, datetime):
@@ -82,6 +94,7 @@ class TradeLogger:
         self.file.flush()
 
     def close(self):
+        """关闭当前文件句柄。"""
         if self.file:
             self.file.close()
             self.file = None

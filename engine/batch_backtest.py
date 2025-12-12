@@ -1,3 +1,5 @@
+"""批量回测与参数搜索入口。"""
+
 from __future__ import annotations
 
 from typing import Any, Dict, List
@@ -10,25 +12,38 @@ from utils.plotter import plot_sweep_heatmap
 
 
 def run_single_backtest(cfg_obj, symbol: str | None = None, strategy_params: dict | None = None):
+    """在给定配置上运行一次回测（可覆盖 symbol/参数）。
+
+    Notes
+    -----
+    该函数会在传入的 cfg_obj 上原地更新 backtest 配置。
+    """
     cfg = cfg_obj
     bt_cfg = cfg.backtest
     if symbol:
         bt_cfg["symbol"] = symbol
     if strategy_params:
         bt_cfg.update(strategy_params)
-    cfg.backtest = bt_cfg  # type: ignore[assignment]
+    cfg.backtest = bt_cfg
     return run_backtest(cfg_obj=cfg)
 
 
 def run_sweep_for_symbol(cfg_path: str, symbol: str, sweep_cfg: dict) -> List[SweepResult]:
-    """
-    对单个 symbol 跑参数搜索。
+    """对单个 symbol 跑参数搜索。
 
-    sweep_cfg 来自 cfg.backtest["sweep"]，字段：
-      - mode: grid / random
-      - n_random: int (仅 random 用)
-      - params: 参数网格
-      - objective: 各指标权重
+    Parameters
+    ----------
+    cfg_path:
+        配置路径。
+    symbol:
+        回测品种。
+    sweep_cfg:
+        `backtest.sweep` 配置段。
+
+    Returns
+    -------
+    list[SweepResult]
+        每组参数的回测结果与得分。
     """
     cfg = load_config(cfg_path, load_env=False, expand_env=False)
 
@@ -98,12 +113,25 @@ def run_sweep_for_symbol(cfg_path: str, symbol: str, sweep_cfg: dict) -> List[Sw
 
 
 def batch_backtest(cfg_path: str = "config/config.yml", top_n: int = 5):
+    """批量回测/参数搜索主入口。
+
+    Parameters
+    ----------
+    cfg_path:
+        配置文件路径。
+    top_n:
+        每个品种输出前 N 组结果。
+
+    Returns
+    -------
+    dict | list | SweepResult
+        若启用 sweep 返回各品种结果字典；否则返回单次回测 summary。
+    """
     cfg = load_config(cfg_path, load_env=False, expand_env=False)
     bt_cfg = getattr(cfg, "backtest", None)
     if bt_cfg is None:
         raise ValueError("backtest config not found")
 
-    # ✅ 关键：从 backtest 里拿 sweep，而不是 cfg.sweep
     sweep_cfg = bt_cfg.get("sweep")
     if not sweep_cfg or not sweep_cfg.get("enabled"):
         # 没开 sweep，就按单次回测跑

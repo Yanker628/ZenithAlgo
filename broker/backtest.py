@@ -1,3 +1,8 @@
+"""回测专用 Broker。
+
+在离线回测中模拟撮合、手续费、滑点与现金约束。
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -8,6 +13,20 @@ from market.models import OrderSignal, Position
 
 
 class BacktestBroker(Broker):
+    """离线回测撮合器。
+
+    Parameters
+    ----------
+    initial_equity:
+        初始资金。
+    maker_fee:
+        Maker 手续费率（0.0002 表示 0.02%）。
+    taker_fee:
+        Taker 手续费率。
+    slippage_bp:
+        滑点（bp=万分比），买单抬高、卖单压低。
+    """
+
     def __init__(
         self,
         initial_equity: float,
@@ -29,16 +48,52 @@ class BacktestBroker(Broker):
         self.trades: list[dict] = []
 
     def get_position(self, symbol: str) -> Position | None:
+        """返回当前持仓（仅本地视图）。"""
         return self.positions.get(symbol)
 
     def _apply_slippage(self, price: float, side: str) -> float:
-        """按方向应用滑点，bp=万分比。买单提高价格，卖单降低价格。"""
+        """按方向应用滑点。
+
+        Parameters
+        ----------
+        price:
+            原始市场价格。
+        side:
+            "buy" 或 "sell"。
+
+        Returns
+        -------
+        float
+            应用滑点后的成交价。
+        """
         if self.slippage_bp == 0:
             return price
         delta = price * (self.slippage_bp / 10000)
         return price + delta if side == "buy" else price - delta
 
-    def execute(self, signal: OrderSignal, tick_price: float | None = None, ts: datetime | None = None) -> dict:
+    def execute(
+        self,
+        signal: OrderSignal,
+        tick_price: float | None = None,
+        ts: datetime | None = None,
+        **kwargs,
+    ) -> dict:
+        """模拟执行一个订单信号。
+
+        Parameters
+        ----------
+        signal:
+            订单信号，qty 为目标数量。
+        tick_price:
+            当前 tick 价格（必填）。
+        ts:
+            tick 时间，用于记录权益曲线。
+
+        Returns
+        -------
+        dict
+            执行结果（含成交价、手续费、PnL、现金/持仓）。
+        """
         raw_price = tick_price
         if raw_price is None:
             return {"status": "error", "error": "missing price"}
@@ -48,6 +103,7 @@ class BacktestBroker(Broker):
         pos = self.positions.get(signal.symbol) or Position(symbol=signal.symbol, qty=0.0, avg_price=0.0)
         realized_delta = 0.0
         fee_paid = 0.0
+        exec_qty = 0.0
 
         if signal.side == "buy":
             # 资金约束：现金不足则按剩余现金缩减数量，最低到 0 则拒单
@@ -58,6 +114,7 @@ class BacktestBroker(Broker):
             if max_affordable_qty <= 0:
                 return {"status": "blocked", "reason": "insufficient_cash"}
             qty_to_buy = min(signal.qty, max_affordable_qty)
+            exec_qty = qty_to_buy
 
             new_qty = pos.qty + qty_to_buy
             notional = exec_price * qty_to_buy
@@ -71,6 +128,7 @@ class BacktestBroker(Broker):
         elif signal.side == "sell":
             close_qty = min(pos.qty, signal.qty)
             if close_qty > 0:
+                exec_qty = close_qty
                 notional = exec_price * close_qty
                 fee_paid = notional * fee_rate
                 realized_delta = (exec_price - pos.avg_price) * close_qty - fee_paid
@@ -102,7 +160,7 @@ class BacktestBroker(Broker):
                 "ts": ts,
                 "symbol": signal.symbol,
                 "side": signal.side,
-                "qty": signal.qty,
+                "qty": exec_qty,
                 "price": raw_price,
                 "slippage_price": exec_price,
                 "fee": fee_paid,
@@ -114,7 +172,7 @@ class BacktestBroker(Broker):
             "status": "filled",
             "symbol": signal.symbol,
             "side": signal.side,
-            "qty": signal.qty,
+            "qty": exec_qty,
             "price": raw_price,
             "slippage_price": exec_price,
             "realized_delta": realized_delta,

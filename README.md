@@ -104,24 +104,30 @@ cp config/config.example.yml config/config.yml
 
 ### 运行示例
 
-**实时交易（Paper Trading）**
+推荐统一入口 `main.py`（旧的 `python -m engine.*` 仍兼容）。
+
+**实时交易（Paper Trading / Dry-run / Live）**
 ```bash
-python -m engine.runner
+python main.py runner --config config/config.yml
+# 不写子命令时默认 runner:
+python main.py --config config/config.yml
+# dry-run/测试想跑有限 tick:
+python main.py runner --max-ticks 200
 ```
 
 **单次回测**
 ```bash
-python -m engine.backtest_runner
+python main.py backtest --config config/config.yml
 ```
 
 **参数网格搜索**
 ```bash
-python -m engine.batch_backtest
+python main.py sweep --config config/config.yml
 ```
 
 **Walk-Forward 验证**
 ```bash
-python -m engine.walkforward
+python main.py walkforward --config config/config.yml
 ```
 
 ## 📚 使用指南
@@ -136,6 +142,9 @@ python -m engine.walkforward
 | `paper` | 真实行情 | 纸面交易 | 策略验证、实盘前测试 |
 | `live-testnet` | 真实行情 | Testnet 下单 | 实盘接口测试 |
 | `live-mainnet` | 真实行情 | 真实下单 | **生产环境（需谨慎）** |
+
+说明：
+- `dry-run/paper/live-*` 当前按现货语义处理：`sell` 只会平掉已有持仓，不会产生负仓位（默认不做空）。
 
 ### 配置说明
 
@@ -176,6 +185,14 @@ risk:
   max_daily_loss_pct: 0.05   # 单日最大亏损（5%）
 ```
 
+#### 下单规模配置（runner/paper/live）
+```yaml
+sizing:
+  position_pct: 0.2          # 单品种最大持仓占 equity_base 比例
+  trade_notional: 200        # 单笔最大名义
+# runner/paper 会优先使用该 sizing；若缺省则复用 backtest.sizing
+```
+
 #### 回测配置
 ```yaml
 backtest:
@@ -208,21 +225,27 @@ from market.models import Tick, OrderSignal
 class MyStrategy(Strategy):
     def on_tick(self, tick: Tick) -> list[OrderSignal]:
         # 你的策略逻辑
-        signals = []
-        # ... 计算信号 ...
-        return signals
+        # 只表达方向/理由，真实下单数量交给 sizing 层统一计算
+        if ...:
+            return [OrderSignal(symbol=tick.symbol, side="buy", qty=0.0, reason="my_signal")]
+        return []
 ```
+
+策略 qty 约定：
+- `qty <= 0`：表示“方向信号”，由 `sizing` 计算真实数量（runner/paper/backtest 共用）。
+- `qty > 0`：表示策略希望的目标数量，但仍会被 `sizing`/`risk` 裁剪到上限。
 
 ### 回测与优化
 
 **单次回测**
 - 修改 `config.yml` 中的 `backtest` 配置
-- 运行 `python -m engine.backtest_runner`
+- 运行 `python main.py backtest --config config/config.yml`
 - 结果输出到控制台和 `data/trades/` 目录
+- 回测中若现金不足会自动缩量成交，日志/指标记录的是“真实成交量”。
 
 **参数搜索**
 - 在 `backtest.sweep` 中配置参数网格
-- 运行 `python -m engine.batch_backtest`
+- 运行 `python main.py sweep --config config/config.yml`
 - 结果保存到 `data/research/ma_sweep_*.csv`
 
 **最优参数生成**

@@ -1,3 +1,9 @@
+"""Walk-Forward 验证。
+
+按时间分段训练（sweep 找最优参数）+ 测试（回测评估），
+用于更稳健地评估参数泛化能力。
+"""
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -6,12 +12,18 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from engine.backtest_runner import run_backtest, parse_iso
-from utils.best_params import pick_best_params, generate_best_config
+from utils.best_params import pick_best_params
 from utils.config_loader import load_config
 from utils.param_search import grid_search
 
 
-def _split_segments(start: datetime, end: datetime, n_segments: int = 3, train_ratio: float = 0.7) -> List[Tuple[Tuple[datetime, datetime], Tuple[datetime, datetime]]]:
+def _split_segments(
+    start: datetime,
+    end: datetime,
+    n_segments: int = 3,
+    train_ratio: float = 0.7,
+) -> List[Tuple[Tuple[datetime, datetime], Tuple[datetime, datetime]]]:
+    """将整体区间切成 n 段 train/test 子区间。"""
     segments = []
     total_seconds = (end - start).total_seconds()
     seg_len = total_seconds / n_segments
@@ -30,6 +42,26 @@ def walk_forward(
     min_trades: int = 10,
     output_dir: str = "data/walkforward",
 ):
+    """执行 Walk-Forward 验证。
+
+    Parameters
+    ----------
+    cfg_path:
+        配置文件路径。
+    n_segments:
+        分段数量。
+    train_ratio:
+        每段训练占比。
+    min_trades:
+        训练段筛选最优参数时要求的最少交易数。
+    output_dir:
+        sweep CSV 输出目录。
+
+    Returns
+    -------
+    dict
+        含每段参数/指标以及 overall 汇总的结果。
+    """
     cfg = load_config(cfg_path, load_env=False, expand_env=False)
     bt_cfg = getattr(cfg, "backtest", None)
     if not bt_cfg:
@@ -42,7 +74,6 @@ def walk_forward(
     segments = _split_segments(start, end, n_segments, train_ratio)
 
     results = {"segments": [], "overall": {}}
-    all_equity = []
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -86,8 +117,6 @@ def walk_forward(
                 "metrics": summary.get("metrics", {}),
             }
         )
-        all_equity.extend(cfg_test.backtest.get("equity_curve", []))  # type: ignore[index]
-
     # 汇总：简单取各段指标平均（可扩展为加权）
     if results["segments"]:
         total_return = sum(seg["metrics"].get("total_return", 0) for seg in results["segments"]) / len(

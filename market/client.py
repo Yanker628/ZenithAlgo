@@ -1,3 +1,5 @@
+"""行情客户端（实时 Binance / 本地假数据）。"""
+
 import asyncio
 import json
 import time
@@ -13,18 +15,27 @@ from utils.logging import setup_logger
 
 
 class MarketClient(ABC):
+    """行情客户端抽象基类。"""
+
     @abstractmethod
     def tick_stream(self, symbol: str) -> Iterator[Tick]:
-        """
-        返回一个 Tick 生成器，供 Engine 消费。
+        """生成 Tick 流。
+
+        Parameters
+        ----------
+        symbol:
+            交易对。
+
+        Returns
+        -------
+        Iterator[Tick]
+            按时间顺序产生的 Tick。
         """
         raise NotImplementedError
 
 
 class FakeMarketClient(MarketClient):
-    """
-    本地假数据源，便于离线开发/测试。
-    """
+    """本地假数据源，便于离线开发/测试。"""
 
     def __init__(self, logger=None):
         self.logger = logger or setup_logger("market-fake")
@@ -38,11 +49,14 @@ class FakeMarketClient(MarketClient):
 
 
 class BinanceMarketClient(MarketClient):
+    """Binance 实时行情客户端（REST + WebSocket）。"""
+
     def __init__(self, ws_base: str | None = "wss://stream.binance.com:9443/ws", logger=None):
         self.ws_base = ws_base or "wss://stream.binance.com:9443/ws"
         self.logger = logger or setup_logger("market-binance")
 
     def rest_price(self, symbol: str) -> float:
+        """通过 REST 拉取最新价格。"""
         url = "https://api.binance.com/api/v3/ticker/price"
         resp = requests.get(url, params={"symbol": symbol}, timeout=5)
         resp.raise_for_status()
@@ -71,9 +85,7 @@ class BinanceMarketClient(MarketClient):
                 await asyncio.sleep(3)
 
     def tick_stream(self, symbol: str) -> Iterator[Tick]:
-        """
-        同步生成器包装异步 WebSocket，便于当前 Engine 使用。
-        """
+        """同步生成器包装异步 WebSocket。"""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         queue: asyncio.Queue = asyncio.Queue()
@@ -85,9 +97,21 @@ class BinanceMarketClient(MarketClient):
 
 
 def get_market_client(mode: str, exchange_name: str, ws_url: str | None = None, logger=None) -> MarketClient:
-    """
-    根据配置选择行情客户端。
-    mode: live/real -> 实盘；dry_run/paper/backtest/fake -> 假数据
+    """根据配置选择行情客户端。
+
+    Parameters
+    ----------
+    mode:
+        运行模式（live/paper/dry-run/backtest 等）。
+    exchange_name:
+        交易所名称（当前仅支持 binance）。
+    ws_url:
+        可选 WebSocket URL。
+
+    Returns
+    -------
+    MarketClient
+        对应模式的行情客户端。
     """
     mode_l = mode.lower().replace("_", "-")
     ex_l = exchange_name.lower()

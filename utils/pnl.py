@@ -1,10 +1,10 @@
+"""PnL 估算工具。"""
+
 from market.models import Position
 
 
 def estimate_pnl(positions: dict[str, Position], last_prices: dict[str, float]) -> float:
-    """
-    按持仓均价与最新价估算未实现盈亏。
-    """
+    """估算未实现 PnL。"""
     pnl = 0.0
     for symbol, pos in positions.items():
         last = last_prices.get(symbol)
@@ -17,9 +17,7 @@ def estimate_pnl(positions: dict[str, Position], last_prices: dict[str, float]) 
 def realized_delta(
     prev_positions: dict[str, Position], current_positions: dict[str, Position], last_prices: dict[str, float]
 ) -> float:
-    """
-    估算本次 tick 内平仓带来的已实现盈亏（简单按上一次持仓均价与当前价差）。
-    """
+    """估算从 prev_positions 到 current_positions 的已实现 PnL 变动。"""
     delta = 0.0
     for symbol, prev in prev_positions.items():
         if prev.qty == 0:
@@ -35,9 +33,7 @@ def realized_delta(
 
 
 def compute_unrealized_pnl(positions: dict[str, Position], last_prices: dict[str, float]) -> float:
-    """
-    计算未实现盈亏：sum(qty * (last_price - avg_price))
-    """
+    """计算未实现 PnL：sum(qty * (last_price - avg_price))。"""
     pnl = 0.0
     for symbol, pos in positions.items():
         price = last_prices.get(symbol)

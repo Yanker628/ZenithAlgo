@@ -1,3 +1,8 @@
+"""配置加载与数据结构。
+
+支持 YAML 配置、环境变量占位符 `${VAR}` 展开，以及 .env/.env.local 自动加载。
+"""
+
 import os
 import re
 from dataclasses import dataclass, field
@@ -44,9 +49,12 @@ class RawConfig(RawConfigRequired, total=False):
     mode: str
     strategy: StrategyConfigDict
     backtest: dict[str, Any]
+    sizing: dict[str, Any]
+
 
 @dataclass
 class ExchangeConfig:
+    """交易所相关配置。"""
     name: str
     base_url: str
     api_key: str | None = None
@@ -62,17 +70,21 @@ class ExchangeConfig:
 
 @dataclass
 class RiskConfig:
+    """风控参数配置。"""
     max_position_pct: float
     max_daily_loss_pct: float
 
 
 @dataclass
 class StrategyConfig:
+    """策略配置（type + params）。"""
     type: str = "simple_ma"
     params: dict[str, Any] = field(default_factory=dict)
 
+
 @dataclass
 class AppConfig:
+    """应用总配置。"""
     exchange: ExchangeConfig
     risk: RiskConfig
     symbol: str
@@ -81,6 +93,7 @@ class AppConfig:
     mode: str = "paper"
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     backtest: dict[str, Any] | None = None
+    sizing: dict[str, Any] | None = None
 
 def _load_env_file(env_path: Path):
     if not env_path.exists():
@@ -111,6 +124,29 @@ def _load_envs(cfg_path: Path):
 
 
 def load_config(path: str, load_env: bool = True, expand_env: bool = True) -> AppConfig:
+    """从 YAML 读取并解析配置。
+
+    Parameters
+    ----------
+    path:
+        配置文件路径。
+    load_env:
+        是否自动加载 .env/.env.local。
+    expand_env:
+        是否展开 `${VAR}` 占位符。
+
+    Returns
+    -------
+    AppConfig
+        解析后的配置对象。
+
+    Raises
+    ------
+    FileNotFoundError
+        配置文件不存在。
+    ValueError
+        缺少必填字段或缺失环境变量。
+    """
     cfg_path = Path(path)
     if not cfg_path.exists():
         raise FileNotFoundError(f"Config file not found: {cfg_path}")
@@ -155,6 +191,7 @@ def load_config(path: str, load_env: bool = True, expand_env: bool = True) -> Ap
         params.pop("type", None)
         strategy_cfg = StrategyConfig(type=strat_type, params=params)
         backtest_cfg = cfg.get("backtest")
+        sizing_cfg = cfg.get("sizing")
         # 确保 backtest 至少有 symbol 键，便于回测/测试访问
         if isinstance(backtest_cfg, dict) and "symbol" not in backtest_cfg:
             backtest_cfg["symbol"] = symbol
@@ -171,4 +208,5 @@ def load_config(path: str, load_env: bool = True, expand_env: bool = True) -> Ap
         mode=mode,
         strategy=strategy_cfg,
         backtest=backtest_cfg,
+        sizing=sizing_cfg if isinstance(sizing_cfg, dict) else None,
     )

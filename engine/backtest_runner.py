@@ -1,3 +1,9 @@
+"""单次回测引擎。
+
+读取历史 K 线/ Tick，驱动策略→sizing→风控→回测 broker，
+输出 summary 与指标，并可生成图表。
+"""
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -13,15 +19,31 @@ from utils.config_loader import load_config
 from utils.data_loader import HistoricalDataLoader
 from utils.logging import setup_logger
 from utils.pnl import compute_unrealized_pnl
+from utils.sizer import size_signals
 from utils.metrics import compute_metrics
 from utils.plotter import plot_drawdown, plot_equity_curve, plot_return_hist
 
 
 def parse_iso(val: str) -> datetime:
+    """解析 ISO 时间字符串为 UTC datetime。"""
     return datetime.fromisoformat(val.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
 def build_backtest_summary(broker: BacktestBroker, last_prices: Dict[str, float]) -> dict:
+    """根据 broker 状态生成回测总结。
+
+    Parameters
+    ----------
+    broker:
+        回测 broker。
+    last_prices:
+        每个 symbol 的最后价格。
+
+    Returns
+    -------
+    dict
+        包含 realized/unrealized/cash/positions 等字段。
+    """
     unrealized = compute_unrealized_pnl(broker.positions, last_prices)
     return {
         "realized_pnl": broker.realized_pnl_all,
@@ -32,6 +54,25 @@ def build_backtest_summary(broker: BacktestBroker, last_prices: Dict[str, float]
 
 
 def run_backtest(cfg_path: str = "config/config.yml", cfg_obj=None):
+    """运行一次回测。
+
+    Parameters
+    ----------
+    cfg_path:
+        配置文件路径，需包含 backtest 配置段。
+    cfg_obj:
+        已加载的配置对象；提供时会忽略 cfg_path。
+
+    Returns
+    -------
+    dict
+        回测 summary，包含 `metrics` 字段。
+
+    Raises
+    ------
+    ValueError
+        当 backtest 配置缺失时抛出。
+    """
     # 回测不依赖私密 Key，缺省不加载/展开 env（避免占位符报错）
     cfg = cfg_obj or load_config(cfg_path, load_env=False, expand_env=False)
     bt_cfg = getattr(cfg, "backtest", None)
@@ -89,6 +130,7 @@ def run_backtest(cfg_path: str = "config/config.yml", cfg_obj=None):
 
     last_prices: dict[str, float] = {}
     equity_base = float(bt_cfg.get("initial_equity", getattr(cfg, "equity_base", 0) or 0))
+    sizing_cfg = bt_cfg.get("sizing", {}) if isinstance(bt_cfg, dict) else {}
 
     last_ts = None
     current_day = None
@@ -110,9 +152,6 @@ def run_backtest(cfg_path: str = "config/config.yml", cfg_obj=None):
         # 2) 正常回测逻辑
         last_prices[tick.symbol] = tick.price
 
-        # 当前持仓信息，用于仓位约束
-        pos = broker.get_position(tick.symbol)
-
         # 更新 PnL（与实盘类似）
         unrealized = compute_unrealized_pnl(broker.positions, last_prices)
         broker.unrealized_pnl = unrealized
@@ -126,44 +165,15 @@ def run_backtest(cfg_path: str = "config/config.yml", cfg_obj=None):
         if not signals:
             continue
 
-        filtered = risk.filter_signals(signals)
+        for sig in signals:
+            sig.price = tick.price
+        sized_signals = size_signals(signals, broker, sizing_cfg, equity_base, logger=logger)
+
+        filtered = risk.filter_signals(sized_signals)
         if not filtered:
             continue
 
         for sig in filtered:
-            sig.price = tick.price
-            # 仓位/下单规模约束：按 position_pct 或 trade_notional 限制下单数量
-            price = tick.price
-            if price <= 0:
-                continue
-            sizing_cfg = bt_cfg.get("sizing", {}) if isinstance(bt_cfg, dict) else {}
-            max_position_pct = sizing_cfg.get("position_pct")
-            trade_notional = sizing_cfg.get("trade_notional")
-
-            max_qty_by_pos = None
-            if max_position_pct is not None and sig.side == "buy":
-                max_notional = equity_base * float(max_position_pct)
-                current_notional = abs(pos.qty * price) if pos else 0.0
-                remaining_notional = max(0.0, max_notional - current_notional)
-                max_qty_by_pos = remaining_notional / price if price > 0 else 0.0
-
-            max_qty_by_trade = None
-            if trade_notional is not None:
-                max_qty_by_trade = float(trade_notional) / price if price > 0 else 0.0
-
-            target_qty = sig.qty
-            # 卖单优先确保能平仓：如果有持仓，按持仓数量上限
-            if sig.side == "sell" and pos and pos.qty > 0:
-                target_qty = min(target_qty, pos.qty)
-            if max_qty_by_pos is not None:
-                target_qty = min(target_qty, max_qty_by_pos)
-            if max_qty_by_trade is not None:
-                target_qty = min(target_qty, max_qty_by_trade)
-
-            if target_qty <= 0:
-                continue
-
-            sig.qty = target_qty
             res = broker.execute(sig, tick_price=tick.price, ts=tick.ts)
             logger.debug(f"Backtest order: {res}")
 

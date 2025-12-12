@@ -1,10 +1,23 @@
-from typing import List
+"""风险管理与信号过滤。"""
+
 from market.models import OrderSignal, Position
 from utils.logging import setup_logger
 from utils.config_loader import RiskConfig
 
 
 class RiskManager:
+    """风险管理器。
+
+    Parameters
+    ----------
+    risk_cfg:
+        风控配置（max_position_pct/max_daily_loss_pct）。
+    suppress_warnings:
+        是否抑制 warning 日志（回测常用）。
+    equity_base:
+        基准权益，用于按名义比例裁剪仓位。
+    """
+
     def __init__(self, risk_cfg: RiskConfig, suppress_warnings: bool = False, equity_base: float | None = None):
         self.cfg = risk_cfg
         self.logger = setup_logger("risk")
@@ -22,11 +35,16 @@ class RiskManager:
         self._daily_block_logged = False   # 避免重复刷 warning
 
     def update_position(self, pos: Position):
+        """更新内部持仓快照。"""
         self.positions[pos.symbol] = pos
 
     def set_daily_pnl(self, pnl: float):
-        """
-        pnl: 一般你在回测里传的是 daily_pnl_pct（例如 -0.03 表示亏 3%）
+        """设置当日 PnL（按比例）。
+
+        Parameters
+        ----------
+        pnl:
+            当日 PnL 百分比，例如 -0.03 表示亏损 3%。
         """
         self.daily_pnl = pnl
         # 有配置 max_daily_loss_pct 才生效
@@ -39,9 +57,7 @@ class RiskManager:
                     self._daily_block_logged = True
 
     def reset_daily_state(self, log: bool = True):
-        """
-        每个自然日开盘前/跨日时调用，重置当天风控状态。
-        """
+        """跨日重置风控状态。"""
         self.daily_pnl = 0.0
         self._daily_blocked = False
         self._daily_block_logged = False
@@ -49,8 +65,11 @@ class RiskManager:
             self.logger.info("[RISK] Daily state reset.")
 
     def filter_signals(self, signals: list[OrderSignal]) -> list[OrderSignal]:
-        """
-        输入原始策略信号，输出通过风控后的信号。
+        """过滤并裁剪策略信号。
+
+        Notes
+        -----
+        本方法会**原地修改**传入信号的 qty（如做仓位裁剪）。
         """
         # 如果今日已经触发日损，直接静默丢弃，不再刷 warning
         if self._daily_blocked:

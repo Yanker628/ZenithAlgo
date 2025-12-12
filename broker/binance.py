@@ -1,3 +1,5 @@
+"""Binance broker（dry-run / paper / live）。"""
+
 import time
 import hmac
 import hashlib
@@ -13,7 +15,17 @@ from utils.trade_logger import TradeLogger, TradeRecord
 
 SymbolRule = dict[str, float]
 
+
 class BinanceBroker(Broker):
+    """对接 Binance 的 broker。
+
+    Notes
+    -----
+    - `DRY_RUN`：完全模拟，不触网。
+    - `PAPER`：使用真实行情、仅本地更新持仓。
+    - `LIVE_*`：真实下单（受 allow_live/白名单/精度校验保护）。
+    """
+
     def __init__(
         self,
         base_url: str,
@@ -66,10 +78,22 @@ class BinanceBroker(Broker):
         return resp.json()
 
     def get_position(self, symbol: str) -> Position | None:
-        # V1.1 可以先只用本地持仓视图
+        """返回本地持仓视图中的仓位。"""
         return self.positions.get(symbol)
 
-    def execute(self, signal: OrderSignal) -> dict:
+    def execute(self, signal: OrderSignal, **kwargs) -> dict:
+        """执行信号（按 mode 选择 dry-run/paper/live）。
+
+        Parameters
+        ----------
+        signal:
+            订单信号，必须包含 symbol/side/qty，paper/live 需有 price。
+
+        Returns
+        -------
+        dict
+            执行结果（含状态、成交价、持仓快照等）。
+        """
         self.logger.info(f"Execute signal: {signal.symbol} {signal.side} qty={signal.qty} reason={signal.reason}")
 
         if self.symbols_allowlist and signal.symbol not in self.symbols_allowlist:
@@ -220,7 +244,8 @@ class BinanceBroker(Broker):
             close_qty = min(pos.qty, signal.qty)
             if price is not None and close_qty > 0 and pos.qty > 0:
                 realized_delta = (price - pos.avg_price) * close_qty
-            pos.qty = pos.qty - signal.qty
+            # 现货/纸面默认不允许做空：只按可平仓数量减少持仓
+            pos.qty = pos.qty - close_qty
             if pos.qty <= 0:
                 pos.avg_price = 0.0
         elif signal.side == "flat":

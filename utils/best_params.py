@@ -1,3 +1,5 @@
+"""从参数搜索 CSV 里挑选最优参数并生成新配置。"""
+
 from __future__ import annotations
 
 import csv
@@ -7,9 +9,19 @@ from typing import Any, Dict, List
 
 
 def pick_best_params(csv_path: str | Path, min_trades: int = 30) -> dict:
-    """
-    从 sweep CSV 选择满足 min_trades 的最佳参数行，返回参数 dict。
-    优先使用 score；若缺失/为 0，使用 0.4*ret + 0.4*sharpe - 0.2*dd 作为评分。
+    """从 sweep CSV 中挑选最佳参数行。
+
+    Parameters
+    ----------
+    csv_path:
+        sweep CSV 路径。
+    min_trades:
+        最少交易数要求；若无满足行会自动放宽至 0 重试。
+
+    Returns
+    -------
+    dict
+        最佳参数 dict。
     """
     path = Path(csv_path)
     best_row: Dict[str, Any] | None = None
@@ -74,9 +86,7 @@ def pick_best_params(csv_path: str | Path, min_trades: int = 30) -> dict:
 
 
 def generate_best_config(base_cfg_path: str | Path, output_path: str | Path, params: dict) -> Path:
-    """
-    读取 base config，将 backtest.strategy 覆盖为最佳参数，写入 output_path。
-    """
+    """生成包含最佳参数的新配置文件。"""
     import yaml
 
     # 直接读 YAML 以保留原格式结构，避免 env 占位符报错

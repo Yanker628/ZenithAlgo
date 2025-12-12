@@ -1,3 +1,5 @@
+"""回测绩效指标计算。"""
+
 from __future__ import annotations
 
 import math
@@ -7,9 +9,7 @@ from typing import Iterable
 
 
 def _annualization_factor(equity_curve: list[tuple[datetime, float]]) -> float:
-    """
-    根据时间间隔动态估计年化因子。
-    """
+    """根据 equity_curve 的时间间隔估计 Sharpe 年化因子。"""
     if len(equity_curve) < 2:
         return math.sqrt(365)
     equity_curve = sorted(equity_curve, key=lambda x: x[0])
@@ -26,6 +26,7 @@ def _annualization_factor(equity_curve: list[tuple[datetime, float]]) -> float:
 
 
 def compute_equity_metrics(equity_curve: list[tuple[datetime, float]]) -> dict:
+    """计算权益曲线指标（总收益、最大回撤、Sharpe）。"""
     if not equity_curve:
         return {"total_return": 0.0, "max_drawdown": 0.0, "sharpe": 0.0}
 
@@ -60,6 +61,7 @@ def compute_equity_metrics(equity_curve: list[tuple[datetime, float]]) -> dict:
 
 
 def compute_trade_metrics(trades: Iterable[dict]) -> dict:
+    """计算交易维度指标（胜率、均值盈亏、交易数）。"""
     wins = []
     losses = []
     for t in trades:
@@ -86,6 +88,7 @@ def compute_metrics(
     equity_curve: list[tuple[datetime, float]],
     trades: list[dict] | None = None,
 ) -> dict:
+    """合并权益与交易指标。"""
     eq_metrics = compute_equity_metrics(equity_curve)
     trade_metrics = compute_trade_metrics(trades or [])
     return {**eq_metrics, **trade_metrics}

@@ -1,14 +1,18 @@
+"""核心数据结构：Tick/Candle/OrderSignal/Position。"""
+
 from dataclasses import dataclass
 from datetime import datetime
 
 @dataclass
 class Tick:
+    """市场 Tick（逐笔/简化成交）。"""
     symbol: str
     price: float
     ts: datetime
 
 @dataclass
 class Candle:
+    """K 线数据。"""
     symbol: str
     open: float
     high: float
@@ -20,6 +24,7 @@ class Candle:
 
 @dataclass
 class OrderSignal:
+    """策略输出的订单信号。"""
     symbol: str
     side: str        # "buy" / "sell" / "flat"
     qty: float       # 数量或比例
@@ -28,6 +33,7 @@ class OrderSignal:
 
 @dataclass
 class Position:
+    """持仓快照。"""
     symbol: str
     qty: float
     avg_price: float

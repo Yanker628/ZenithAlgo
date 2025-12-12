@@ -1,3 +1,5 @@
+"""简单均线交叉策略。"""
+
 from collections import deque
 from datetime import datetime
 from typing import Deque
@@ -7,6 +9,20 @@ from .base import Strategy
 
 
 class SimpleMAStrategy(Strategy):
+    """简单移动均线交叉策略。
+
+    Parameters
+    ----------
+    short_window:
+        短期均线窗口。
+    long_window:
+        长期均线窗口。
+    min_ma_diff:
+        触发信号的最小均线差（去抖动）。
+    cooldown_secs:
+        信号冷却时间（秒）。
+    """
+
     def __init__(
         self,
         short_window: int = 5,
@@ -23,6 +39,7 @@ class SimpleMAStrategy(Strategy):
         self.last_signal: str | None = None  # "long" / "short" / None
 
     def on_tick(self, tick: Tick) -> list[OrderSignal]:
+        """输入 Tick 输出 MA 交叉信号。"""
         self.prices.append(tick.price)
         if len(self.prices) < self.long_window:
             return []
@@ -44,11 +61,11 @@ class SimpleMAStrategy(Strategy):
         signals: list[OrderSignal] = []
 
         if short_ma > long_ma and self.last_signal != "long":
-            signals.append(OrderSignal(symbol=tick.symbol, side="buy", qty=0.1, reason="ma_cross_up"))
+            signals.append(OrderSignal(symbol=tick.symbol, side="buy", qty=0.0, reason="ma_cross_up"))
             self.last_signal = "long"
             self.last_trade_ts = now
         elif short_ma < long_ma and self.last_signal != "short":
-            signals.append(OrderSignal(symbol=tick.symbol, side="sell", qty=0.1, reason="ma_cross_down"))
+            signals.append(OrderSignal(symbol=tick.symbol, side="sell", qty=0.0, reason="ma_cross_down"))
             self.last_signal = "short"
             self.last_trade_ts = now
 

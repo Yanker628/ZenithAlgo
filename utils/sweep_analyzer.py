@@ -1,3 +1,5 @@
+"""Sweep 结果分析工具（读取 CSV、筛选 Top-N）。"""
+
 from __future__ import annotations
 
 import csv
@@ -8,6 +10,7 @@ from typing import Callable, Iterable, List
 
 @dataclass
 class SweepResult:
+    """参数 sweep 的单行结果。"""
     symbol: str
     params: dict
     metrics: dict
@@ -15,6 +18,7 @@ class SweepResult:
 
 
 def load_sweep_results(path: str | Path) -> List[SweepResult]:
+    """读取 sweep CSV 并解析为 SweepResult 列表。"""
     path = Path(path)
     rows: List[SweepResult] = []
     with path.open("r", newline="", encoding="utf-8") as f:
@@ -77,6 +81,7 @@ def load_sweep_results(path: str | Path) -> List[SweepResult]:
 
 
 def get_top_n(results: Iterable[SweepResult], n: int = 10, by: str = "score") -> List[SweepResult]:
+    """按 score/sharpe/total_return 排序取 Top-N。"""
     key_funcs = {
         "score": lambda r: r.score,
         "sharpe": lambda r: r.metrics.get("sharpe", 0.0),
@@ -87,4 +92,5 @@ def get_top_n(results: Iterable[SweepResult], n: int = 10, by: str = "score") ->
 
 
 def filter_results(results: Iterable[SweepResult], cond: Callable[[SweepResult], bool]) -> List[SweepResult]:
+    """按自定义条件过滤结果。"""
     return [r for r in results if cond(r)]

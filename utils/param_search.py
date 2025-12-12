@@ -1,3 +1,5 @@
+"""参数搜索（Grid/Random Search）。"""
+
 from __future__ import annotations
 
 import csv
@@ -14,6 +16,7 @@ from utils.config_loader import load_config
 
 @dataclass
 class SweepResult:
+    """一次参数组合回测的结果。"""
     symbol: str
     params: dict
     metrics: dict
@@ -120,6 +123,30 @@ def grid_search(
     filters: dict | None = None,
     low_trades_penalty: float = 0.0,
 ) -> List[SweepResult]:
+    """网格搜索。
+
+    Parameters
+    ----------
+    cfg_path:
+        配置路径。
+    param_grid:
+        参数网格，如 {"short_window":[5,10], ...}。
+    objective_weights:
+        评分权重（可用 w_ret/w_sharpe/w_dd 或 total_return/sharpe/max_drawdown）。
+    output_csv:
+        输出 CSV 路径；None 时写入默认 `data/research/`。
+    cfg_obj:
+        已加载配置对象。
+    filters:
+        过滤条件（min_trades/max_drawdown/min_sharpe）。
+    low_trades_penalty:
+        交易数过少的惩罚系数。
+
+    Returns
+    -------
+    list[SweepResult]
+        所有组合结果。
+    """
     cfg = cfg_obj or load_config(cfg_path, load_env=False, expand_env=False)
     if not cfg.backtest:
         raise ValueError("backtest config not found")
@@ -156,6 +183,7 @@ def random_search(
     filters: dict | None = None,
     low_trades_penalty: float = 0.0,
 ) -> List[SweepResult]:
+    """随机搜索（从网格中抽样 n_samples 组）。"""
     cfg = cfg_obj or load_config(cfg_path, load_env=False, expand_env=False)
     if not cfg.backtest:
         raise ValueError("backtest config not found")

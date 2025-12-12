@@ -1,3 +1,8 @@
+"""历史数据加载与下载。
+
+支持从 CSV 读取 Tick/Candle，并在需要时通过 Binance REST 补齐 K 线。
+"""
+
 from __future__ import annotations
 
 import csv
@@ -26,8 +31,21 @@ def _parse_dt(val: str) -> datetime:
 
 
 def load_ticks_from_csv(path: str | Path, tz: timezone = timezone.utc, parser: Callable[[dict[str, str]], Tick] | None = None) -> Iterator[Tick]:
-    """
-    从 CSV 文件读取 Tick，默认列名：symbol,price,ts。ts 支持 ISO 或秒/毫秒时间戳。
+    """从 CSV 读取 Tick 流。
+
+    Parameters
+    ----------
+    path:
+        CSV 路径。
+    tz:
+        输出时间的时区，默认 UTC。
+    parser:
+        可选自定义行解析函数。
+
+    Yields
+    ------
+    Tick
+        逐行解析得到的 Tick。
     """
     with Path(path).open("r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -42,10 +60,7 @@ def load_ticks_from_csv(path: str | Path, tz: timezone = timezone.utc, parser: C
 
 
 def load_candles_from_csv(path: str | Path, tz: timezone = timezone.utc, parser: Callable[[dict[str, str]], Candle] | None = None) -> Iterator[Candle]:
-    """
-    从 CSV 文件读取 Candle，默认列名：symbol,open,high,low,close,volume,start_ts,end_ts。
-    时间字段支持 ISO 或秒/毫秒时间戳。
-    """
+    """从 CSV 读取 Candle 流。"""
     with Path(path).open("r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -86,6 +101,14 @@ def iter_candles(source: Iterable[Candle]) -> Iterator[Candle]:
 
 
 class HistoricalDataLoader:
+    """历史 K 线数据管理器。
+
+    Parameters
+    ----------
+    data_dir:
+        历史数据目录。
+    """
+
     def __init__(self, data_dir: str = "data/history"):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -140,6 +163,7 @@ class HistoricalDataLoader:
         auto_download: bool = False,
         force_download: bool = False,
     ) -> List[Candle]:
+        """加载回测区间所需 K 线，并可自动补齐缺失数据。"""
         path = self._klines_path(symbol, interval)
         if force_download or (auto_download and not path.exists()):
             self.download_binance_klines(symbol, interval, start, end, path, overwrite=True)
@@ -166,10 +190,7 @@ class HistoricalDataLoader:
         dest_path: Path,
         overwrite: bool = False,
     ):
-        """
-        从 Binance 公共 REST 拉取历史 K 线并写入 CSV。
-        overwrite=False 时会合并已有文件，避免覆盖已有数据。
-        """
+        """从 Binance REST 拉取历史 K 线并写入 CSV。"""
         url = "https://api.binance.com/api/v3/klines"
         start_ms = int(start.timestamp() * 1000)
         end_ms = int(end.timestamp() * 1000)
@@ -245,8 +266,6 @@ class HistoricalDataLoader:
             writer.writerows(merged_rows)
 
     def candle_to_ticks(self, candles: list[Candle]) -> Iterator[Tick]:
-        """
-        将 K 线转换为粗粒度 Tick 流，按收盘价生成 Tick。
-        """
+        """将 Candle 序列转换为粗粒度 Tick（按收盘价）。"""
         for c in candles:
             yield Tick(symbol=c.symbol, price=c.close, ts=c.end_ts)
