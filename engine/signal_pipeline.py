@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from broker.abstract_broker import Broker
@@ -13,6 +14,20 @@ from shared.models.models import OrderSignal, Tick
 from algo.risk.manager import RiskManager
 from algo.strategy.base import Strategy
 from utils.sizer import size_signals
+
+
+@dataclass
+class SignalTrace:
+    """信号“尸检”统计（只计数，不改变接口行为）。"""
+
+    raw: int = 0
+    after_sizing: int = 0
+    after_risk: int = 0
+    dropped_by_sizing: int = 0
+    dropped_by_risk: int = 0
+
+    def to_dict(self) -> dict[str, int]:
+        return {k: int(v) for k, v in asdict(self).items()}
 
 
 def prepare_signals(
@@ -25,9 +40,12 @@ def prepare_signals(
     equity_base: float,
     last_prices: dict[str, float] | None = None,
     logger=None,
+    trace: SignalTrace | None = None,
 ) -> list[OrderSignal]:
     """生成可执行信号（含价格、sizing、风控过滤）。"""
     raw_signals = strategy.on_tick(tick)
+    if trace is not None:
+        trace.raw += len(raw_signals or [])
     if not raw_signals:
         return []
 
@@ -36,10 +54,17 @@ def prepare_signals(
             sig.price = (last_prices or {}).get(sig.symbol) or tick.price
 
     sized_signals = size_signals(raw_signals, broker, sizing_cfg, equity_base, logger=logger)
+    if trace is not None:
+        trace.after_sizing += len(sized_signals or [])
+        trace.dropped_by_sizing += max(0, len(raw_signals) - len(sized_signals or []))
     if not sized_signals:
         return []
 
-    return risk.filter_signals(sized_signals)
+    risk_passed = risk.filter_signals(sized_signals)
+    if trace is not None:
+        trace.after_risk += len(risk_passed or [])
+        trace.dropped_by_risk += max(0, len(sized_signals) - len(risk_passed or []))
+    return risk_passed
 
 
 def execute_signals(

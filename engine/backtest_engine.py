@@ -14,7 +14,7 @@ import pandas as pd
 
 from broker.backtest_broker import BacktestBroker
 from engine.base_engine import BaseEngine, EngineResult
-from engine.signal_pipeline import prepare_signals
+from engine.signal_pipeline import SignalTrace, prepare_signals
 from shared.models.models import OrderSignal, Tick
 from algo.factors.registry import apply_factors, build_factors
 from algo.risk.manager import RiskManager
@@ -202,6 +202,7 @@ class BacktestEngine(BaseEngine):
         last_ts: datetime | None = None
         current_day: date | None = None
         day_start_equity = equity_base
+        signal_trace = SignalTrace()
 
         for _, row in candles_df.iterrows():
             tick = _row_to_tick(row, feature_cols=feature_cols)
@@ -235,6 +236,7 @@ class BacktestEngine(BaseEngine):
                 equity_base=equity_base,
                 last_prices=last_prices,
                 logger=logger,
+                trace=signal_trace,
             )
 
             if filtered:
@@ -262,6 +264,7 @@ class BacktestEngine(BaseEngine):
         summary = build_backtest_summary(broker, last_prices)
         summary["metrics"] = compute_metrics(broker.equity_curve, broker.trades)
         summary["data_health"] = data_health
+        summary["signal_trace"] = signal_trace.to_dict()
 
         artifacts = self._export_artifacts(cfg, bt_cfg, broker=broker, summary=summary)
         logger.info("Backtest summary: %s", summary)
