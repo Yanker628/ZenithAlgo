@@ -14,7 +14,7 @@ lint:
 		echo "markdownlint not found. Install: npm install -g markdownlint-cli"; \
 		exit 1; \
 	}
-	@markdownlint "**/*.md"
+	@markdownlint -c .markdownlint.json --ignore-path .markdownlintignore "**/*.md"
 
 test:
 	@$(PYTHON) -m pytest -q -m "not live"

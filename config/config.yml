@@ -20,6 +20,7 @@ exchange:
 risk:
   max_position_pct: 0.3
   max_daily_loss_pct: 1
+
 # === 修改点 1: 策略基础配置 ===
 strategy:
   type: "trend_filtered" # ★ 必须与你 V2.3 代码中的注册名一致
@@ -41,6 +42,7 @@ backtest:
   auto_download: true
   quiet_risk_logs: true
   flatten_on_end: true
+  record_equity_each_bar: true
 
   fees:
     maker: 0.0002
