@@ -23,8 +23,7 @@ def _to_series(
 
 
 def _to_mpl_time(xs: List[datetime]) -> List[float]:
-    # matplotlib 支持 datetime，但类型检查可能提示不兼容，转为数字避免告警
-    import matplotlib.dates as mdates  # type: ignore
+    import matplotlib.dates as mdates
 
     return [float(mdates.date2num(x)) for x in xs]
 
