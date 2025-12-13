@@ -17,6 +17,13 @@ def test_golden_backtest_metrics_stable():
     for k in CANONICAL_METRIC_KEYS:
         assert k in metrics
 
+    # Verify signal trace logic
+    if "signal_trace" in summary:
+        trace = summary["signal_trace"]
+        assert trace["raw"] >= trace["after_sizing"]
+        assert trace["after_sizing"] >= trace["after_risk"]
+        assert trace["after_risk"] >= 0
+
     expected = json.loads(Path("tests/golden/golden_summary.json").read_text(encoding="utf-8"))
     for k, v in expected.items():
         assert k in metrics
