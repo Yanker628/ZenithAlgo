@@ -6,10 +6,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
+from analysis.metrics.metrics_canon import validate_metrics_schema
 from research import experiment as exp
 
 
@@ -74,6 +76,7 @@ def test_backtest_experiment_artifacts_contract(tmp_path: Path, monkeypatch: pyt
     # 固定 run_id，方便定位输出目录与断言。
     monkeypatch.setattr(exp, "_utc_ts", lambda: "20000101000000")
     monkeypatch.setattr(exp, "_utc_iso", lambda: "2000-01-01T00:00:00Z")
+    monkeypatch.setattr(exp, "_git_info", lambda: {"sha": "deadbeef", "dirty": False})
 
     # 隔离运行目录：避免污染仓库根目录的 results/。
     monkeypatch.chdir(tmp_path)
@@ -109,3 +112,17 @@ def test_backtest_experiment_artifacts_contract(tmp_path: Path, monkeypatch: pyt
     # 产物契约：回测引擎导出
     assert (out_dir / "trades.csv").is_file()
     assert (out_dir / "equity.csv").is_file()
+
+    meta_json = json.loads((out_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta_json.get("schema_version") == exp.EXPERIMENT_SCHEMA_VERSION
+    assert meta_json.get("config_hash")
+    assert meta_json.get("data_hash")
+    assert meta_json.get("created_at")
+    assert meta_json.get("git_sha") is not None
+
+    summary_json = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary_json.get("schema_version") == exp.EXPERIMENT_SCHEMA_VERSION
+    validate_metrics_schema(summary_json.get("metrics", {}) or {})
+
+    results_json = json.loads((out_dir / "results.json").read_text(encoding="utf-8"))
+    assert results_json.get("schema_version") == exp.EXPERIMENT_SCHEMA_VERSION

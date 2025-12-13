@@ -38,7 +38,7 @@
 
 ### 1.5 分析/产物目录统一 (M2 Done)
 
-- 统一产物目录至 `results/`，不再使用 `data/experiments`。
+- 统一产物目录至 `results/`。
 - 目录结构规范化：`results/{task}/{symbol}/{interval}/{range}/{run_id}/`。
 - `equity.csv` 新增 `drawdown` 和 `drawdown_pct` 字段。
 - `research/experiment.py`：统一落盘 `meta.json/summary.json/results.json/report.md/summary.md` 等产物。
@@ -47,7 +47,6 @@
 ### 1.6 数据模块命名收敛（已完成）
 
 - 官方命名统一为 `market_data/`（行情 client + 历史 loader）。
-- 开发阶段不保留 `data/` 兼容层（避免歧义与入口分裂）。
 - 文档路径已同步到 `market_data/`；模型导入推荐使用 `market_data/models.py` 作为稳定入口。
 
 ## 2. 路线图（阶段化）

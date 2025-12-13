@@ -1,4 +1,3 @@
 results/**
 .venv/**
 .pytest_cache/**
-

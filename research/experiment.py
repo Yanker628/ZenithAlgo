@@ -32,6 +32,8 @@ from utils.param_search import grid_search, random_search
 from analysis.visualizations.plotter import plot_param_1d, plot_param_importance, plot_sweep_heatmaps
 from analysis.reports.report import write_report_md, write_summary_md
 
+EXPERIMENT_SCHEMA_VERSION = "1.0"
+
 
 def _utc_ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
@@ -95,12 +97,16 @@ def _write_meta_json(
     data_hashes: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
+        "schema_version": EXPERIMENT_SCHEMA_VERSION,
         "task": task,
         "symbol": symbol,
         "interval": interval,
         "start": start,
         "end": end,
+        "created_at": run_ts,
         "run_ts": run_ts,
+        "git_sha": git.get("sha"),
+        "git_dirty": git.get("dirty"),
         "git": git,
         "config_hash": config_hash,
         "data_hash": data_hash,
@@ -124,6 +130,7 @@ def _write_summary_json(
     metrics = canonicalize_metrics(metrics)
     validate_metrics_schema(metrics)
     payload: dict[str, Any] = {
+        "schema_version": EXPERIMENT_SCHEMA_VERSION,
         "task": task,
         "metrics": metrics,
         "diagnostics": diagnostics,
@@ -284,7 +291,15 @@ def run_backtest_experiment(cfg_path: str) -> ExperimentResult:
     )
     _write_json(
         out_dir / "results.json",
-        {"task": "backtest", "meta": meta, "meta_json": meta_json, "summary": summary, "summary_json": summary_json, "artifacts": artifacts},
+        {
+            "schema_version": EXPERIMENT_SCHEMA_VERSION,
+            "task": "backtest",
+            "meta": meta,
+            "meta_json": meta_json,
+            "summary": summary,
+            "summary_json": summary_json,
+            "artifacts": artifacts,
+        },
     )
     write_report_md(out_dir / "report.md", task="backtest", meta=meta, summary=summary, artifacts=artifacts)
     write_summary_md(out_dir / "summary.md", task="backtest", meta=meta, metrics=metrics, plots=[str(out_dir / "equity.png")])
@@ -604,7 +619,17 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
         artifacts={"dir": str(out_dir)},
         details={"symbols": all_results},
     )
-    _write_json(out_dir / "results.json", {"task": "sweep", "meta": meta, "meta_json": meta_json, "summary_json": summary_json, "symbols": all_results})
+    _write_json(
+        out_dir / "results.json",
+        {
+            "schema_version": EXPERIMENT_SCHEMA_VERSION,
+            "task": "sweep",
+            "meta": meta,
+            "meta_json": meta_json,
+            "summary_json": summary_json,
+            "symbols": all_results,
+        },
+    )
     write_report_md(out_dir / "report.md", task="sweep", meta=meta, summary=payload, artifacts={"dir": str(out_dir)})
     plots = first_sym.get("plots") if isinstance(first_sym, dict) else None  # type: ignore
     write_summary_md(out_dir / "summary.md", task="sweep", meta=meta, metrics=metrics, plots=plots if isinstance(plots, list) else None)
@@ -709,7 +734,17 @@ def run_walkforward_experiment(
         artifacts={"dir": str(out_dir)},
         details={"results": res},
     )
-    _write_json(out_dir / "results.json", {"task": "walkforward", "meta": meta, "meta_json": meta_json, "summary_json": summary_json, "results": res})
+    _write_json(
+        out_dir / "results.json",
+        {
+            "schema_version": EXPERIMENT_SCHEMA_VERSION,
+            "task": "walkforward",
+            "meta": meta,
+            "meta_json": meta_json,
+            "summary_json": summary_json,
+            "results": res,
+        },
+    )
     write_report_md(out_dir / "report.md", task="walkforward", meta=meta, summary=res, artifacts={"dir": str(out_dir)})
     write_summary_md(out_dir / "summary.md", task="walkforward", meta=meta, metrics=overall_metrics)
     logger.info("Experiment saved: %s", out_dir)
