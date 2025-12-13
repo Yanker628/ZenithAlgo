@@ -25,7 +25,7 @@ risk:
 strategy:
   type: "trend_filtered" # ★ 必须与你 V2.3 代码中的注册名一致
   # 默认参数（用于实盘或非 sweep 模式）
-  short_window: 10
+  short_window: 25
   long_window: 120
   slope_threshold: 0.05 # ★ V2.3 新参数
   atr_period: 14 # ★ V2.3 新参数
@@ -57,10 +57,13 @@ backtest:
   strategy:
     type: "trend_filtered" # ★ 保持一致
 
-  # === 修改点 2: V2.3 验证核心配置 ===
   sweep:
     enabled: true
     mode: "grid"
+    # 默认不额外跑一次“最佳参数单次回测”（避免重复计算）：
+    # 只输出 best_params + best_metrics，等你手动把参数写回 config 再跑 backtest。
+    # 如需自动生成 best_backtest 产物：改为 true。
+    run_best_backtest: false
     min_trades: 15 # ★ 提高门槛，带有过滤器的策略如果不交易就没法验证
     max_drawdown: 0.3 # 允许最大 30% 回撤
     min_sharpe: 0.0 # 要求至少不亏钱
@@ -69,10 +72,11 @@ backtest:
     # ★ 针对 V2.3 逻辑的参数网格
     params:
       # 寻找最佳趋势定义：长周期均线
-      long_window: [60, 90, 120]
+      long_window: [60, 90, 120, 150, 180, 210]
+      short_window: [5, 10, 15, 20, 25]
 
-      # 核心验证：斜率过滤器多强才合适？
-      slope_threshold: [0.05, 0.1, 0.2]
+      # # 核心验证：斜率过滤器多强才合适？
+      # slope_threshold: [0.05, 0.1, 0.2]
 
       # (可选) 如果你想验证止损宽松度，可以把下面这行取消注释
       # atr_stop_multiplier: [1.5, 2.0, 3.0]

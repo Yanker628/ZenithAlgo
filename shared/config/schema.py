@@ -90,6 +90,9 @@ class SweepConfig(BaseModel):
     """扫参配置（grid/random）。"""
     enabled: bool = False
     mode: Literal["grid", "random"] = "grid"
+    # 是否在 sweep 结束后额外跑一次“最佳参数单次回测”并导出 trades/equity/report 等产物。
+    # 默认关闭：只输出 best_params 与 best_metrics，避免重复跑一遍回测。
+    run_best_backtest: bool = False
     params: Dict[str, List[Any]] = Field(default_factory=dict)
     objective: SweepObjectiveConfig = Field(default_factory=SweepObjectiveConfig)
     filters: Optional[Dict[str, Any]] = None

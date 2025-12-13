@@ -330,6 +330,8 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
     if not isinstance(bt_cfg, BacktestConfig):
         raise ValueError("backtest config not found")
     sweep_cfg = bt_cfg.sweep
+    if sweep_cfg is None:
+        raise ValueError("backtest.sweep config not found")
     run_id = _utc_ts()
     run_ts = _utc_iso()
     meta = {
@@ -500,20 +502,25 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
         pool = passed if passed else results
         best = sorted(pool, key=lambda r: r.score, reverse=True)[: max(1, int(top_n))]
         best_params = best[0].params if best else {}
+        best_metrics = canonicalize_metrics(best[0].metrics if best else {})
 
-        # 用最佳参数跑一次 backtest，生成 trades/equity/report
-        best_bt_dir = sym_dir / "best_backtest"
-        cfg_best = cfg_sym.model_copy(deep=True)
-        if not isinstance(cfg_best.backtest, BacktestConfig):
-            raise ValueError("backtest config not found")
-        cfg_best.backtest = cfg_best.backtest.model_copy(deep=True)
-        if cfg_best.backtest.strategy is None:
-            cfg_best.backtest.strategy = cfg_best.strategy.model_copy(deep=True)
-        cfg_best.backtest.strategy = cfg_best.backtest.strategy.model_copy(deep=True)
-        cfg_best.backtest.strategy.params = {**dict(cfg_best.backtest.strategy.params or {}), **dict(best_params)}
-        cfg_best.backtest.skip_plots = False
-        bt_summary = BacktestEngine(cfg_obj=cfg_best, artifacts_dir=best_bt_dir).run().summary
-        bt_metrics = canonicalize_metrics(bt_summary.metrics.model_dump() if hasattr(bt_summary, "metrics") else {})
+        # 可选：用最佳参数额外跑一次 backtest，生成 trades/equity/report
+        best_bt_dir = None
+        bt_metrics = None
+        bt_summary = None
+        if bool(getattr(sweep_cfg, "run_best_backtest", False)) and best_params:
+            best_bt_dir = sym_dir / "best_backtest"
+            cfg_best = cfg_sym.model_copy(deep=True)
+            if not isinstance(cfg_best.backtest, BacktestConfig):
+                raise ValueError("backtest config not found")
+            cfg_best.backtest = cfg_best.backtest.model_copy(deep=True)
+            if cfg_best.backtest.strategy is None:
+                cfg_best.backtest.strategy = cfg_best.strategy.model_copy(deep=True)
+            cfg_best.backtest.strategy = cfg_best.backtest.strategy.model_copy(deep=True)
+            cfg_best.backtest.strategy.params = {**dict(cfg_best.backtest.strategy.params or {}), **dict(best_params)}
+            cfg_best.backtest.skip_plots = False
+            bt_summary = BacktestEngine(cfg_obj=cfg_best, artifacts_dir=best_bt_dir).run().summary
+            bt_metrics = canonicalize_metrics(bt_summary.metrics.model_dump() if hasattr(bt_summary, "metrics") else {})
 
         all_results[sym] = {
             "sweep_csv": str(sweep_csv),
@@ -534,47 +541,51 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
                 for r in best
             ],
             "best_params": best_params,
+            "best_metrics": best_metrics,
             "best_backtest": {
                 "dir": str(best_bt_dir),
                 "metrics": bt_metrics,
                 "data_health": bt_summary.data_health.model_dump() if hasattr(bt_summary, "data_health") else {},
-            },
+            }
+            if best_bt_dir is not None and bt_metrics is not None and bt_summary is not None
+            else None,
             "policy": {"filters": filters, "passed_any": bool(passed)},
         }
 
         # best_backtest 子实验 meta/summary（继承父 meta）
-        try:
-            cfg_hash = _config_hash(cfg_path)
-            dh, dhs = _data_hashes(cfg, symbols=[sym])
-            _write_meta_json(
-                best_bt_dir,
-                task="backtest",
-                symbol=sym,
-                interval=str(meta["interval"]),
-                start=meta.get("start"),
-                end=meta.get("end"),
-                run_ts=run_ts,
-                git=meta["git"],
-                config_hash=cfg_hash,
-                data_hash=dh,
-                data_hashes=dhs,
-            )
-            _write_summary_json(
-                best_bt_dir,
-                task="backtest",
-                metrics=bt_metrics,
-                diagnostics=compute_diagnostics(bt_metrics),
-                policy=evaluate_policy(
-                    bt_metrics,
-                    policy_cfg=(filters if isinstance(filters, dict) else None),
-                    stage="research",
-                    git_dirty=bool(meta["git"].get("dirty")),
-                ),
-                artifacts={"dir": str(best_bt_dir), "trades_csv": "trades.csv", "equity_csv": "equity.csv"},
-                details={"parent": str(sym_dir / "meta.json")},
-            )
-        except Exception:
-            pass
+        if best_bt_dir is not None and bt_metrics is not None:
+            try:
+                cfg_hash = _config_hash(cfg_path)
+                dh, dhs = _data_hashes(cfg, symbols=[sym])
+                _write_meta_json(
+                    best_bt_dir,
+                    task="backtest",
+                    symbol=sym,
+                    interval=str(meta["interval"]),
+                    start=meta.get("start"),
+                    end=meta.get("end"),
+                    run_ts=run_ts,
+                    git=meta["git"],
+                    config_hash=cfg_hash,
+                    data_hash=dh,
+                    data_hashes=dhs,
+                )
+                _write_summary_json(
+                    best_bt_dir,
+                    task="backtest",
+                    metrics=bt_metrics,
+                    diagnostics=compute_diagnostics(bt_metrics),
+                    policy=evaluate_policy(
+                        bt_metrics,
+                        policy_cfg=(filters if isinstance(filters, dict) else None),
+                        stage="research",
+                        git_dirty=bool(meta["git"].get("dirty")),
+                    ),
+                    artifacts={"dir": str(best_bt_dir), "trades_csv": "trades.csv", "equity_csv": "equity.csv"},
+                    details={"parent": str(sym_dir / "meta.json")},
+                )
+            except Exception:
+                pass
 
         # 子实验 meta（继承父 meta）
         try:
@@ -596,15 +607,19 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
             _write_summary_json(
                 sym_dir,
                 task="sweep",
-                metrics=bt_metrics,
-                diagnostics=compute_diagnostics(bt_metrics),
+                metrics=best_metrics,
+                diagnostics=compute_diagnostics(best_metrics),
                 policy=evaluate_policy(
-                    bt_metrics,
+                    best_metrics,
                     policy_cfg=(filters if isinstance(filters, dict) else None),
                     stage="research",
                     git_dirty=bool(meta["git"].get("dirty")),
                 ),
-                artifacts={"dir": str(sym_dir), "sweep_csv": str(sweep_csv), "best_backtest_dir": str(best_bt_dir)},
+                artifacts={
+                    "dir": str(sym_dir),
+                    "sweep_csv": str(sweep_csv),
+                    "best_backtest_dir": str(best_bt_dir) if best_bt_dir is not None else None,
+                },
                 details={"symbol": sym, "top": all_results[sym].get("top"), "viz": viz},
             )
         except Exception:
@@ -626,10 +641,9 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
         data_hashes=data_hashes,
     )
     payload = {"task": "sweep", "meta": meta, "symbols": all_results}
-    # sweep 总体 summary：用第一个 symbol 的 best_backtest 作为 metrics 概览
+    # sweep 总体 summary：用第一个 symbol 的 best_metrics 作为 metrics 概览
     first_sym = next(iter(all_results.values()), {}) if all_results else {}
-    bb = first_sym.get("best_backtest") if isinstance(first_sym, dict) else {}
-    metrics = canonicalize_metrics(dict(bb.get("metrics", {}) or {}) if isinstance(bb, dict) else {})
+    metrics = canonicalize_metrics(dict(first_sym.get("best_metrics", {}) or {}) if isinstance(first_sym, dict) else {})
     diagnostics = compute_diagnostics(metrics)
     policy_cfg = getattr(sweep_cfg, "filters", None) if sweep_cfg is not None else None
     if not isinstance(policy_cfg, dict):

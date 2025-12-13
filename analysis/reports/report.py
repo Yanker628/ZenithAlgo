@@ -46,7 +46,7 @@ def _stability_conclusion(metrics: dict[str, Any]) -> str:
 def _data_health_block(meta: dict[str, Any], summary: Any) -> dict[str, Any]:
     if isinstance(summary, dict) and isinstance(summary.get("data_health"), dict):
         return dict(summary["data_health"])
-    # sweep：用第一个 symbol 的 best_backtest.data_health 作为概览
+    # sweep：优先用第一个 symbol 的 best_backtest.data_health 作为概览（若未跑 best_backtest 则回退）
     if isinstance(summary, dict) and isinstance(summary.get("symbols"), dict):
         symbols = summary.get("symbols") or {}
         if symbols:
@@ -101,8 +101,11 @@ def write_report_md(path: Path, *, task: str, meta: dict[str, Any], summary: Any
         symbols = summary.get("symbols") if isinstance(summary.get("symbols"), dict) else {}
         if symbols:
             first = next(iter(symbols.values()))
-            bb = first.get("best_backtest") if isinstance(first, dict) else {}
-            metrics = dict(bb.get("metrics", {}) or {}) if isinstance(bb, dict) else {}
+            if isinstance(first, dict) and isinstance(first.get("best_metrics"), dict):
+                metrics = dict(first.get("best_metrics") or {})
+            else:
+                bb = first.get("best_backtest") if isinstance(first, dict) else {}
+                metrics = dict(bb.get("metrics", {}) or {}) if isinstance(bb, dict) else {}
 
     lines.append("## Data Health")
     lines.append(_md_kv(_data_health_block(meta, summary)))
@@ -143,10 +146,20 @@ def write_report_md(path: Path, *, task: str, meta: dict[str, Any], summary: Any
                 best_params = info.get("best_params") if isinstance(info.get("best_params"), dict) else {}
                 if best_params:
                     lines.append("- best_params: " + json.dumps(best_params, ensure_ascii=False))
-                bb = info.get("best_backtest") if isinstance(info.get("best_backtest"), dict) else {}
-                bbm = bb.get("metrics") if isinstance(bb.get("metrics"), dict) else {} # type: ignore
-                if bbm:
-                    lines.append("- best_metrics: " + json.dumps(_pick(bbm, ["total_return", "sharpe", "max_drawdown", "total_trades"]), ensure_ascii=False))
+                best_metrics = info.get("best_metrics") if isinstance(info.get("best_metrics"), dict) else None
+                if isinstance(best_metrics, dict) and best_metrics:
+                    lines.append(
+                        "- best_metrics: "
+                        + json.dumps(_pick(best_metrics, ["total_return", "sharpe", "max_drawdown", "total_trades"]), ensure_ascii=False)
+                    )
+                else:
+                    bb = info.get("best_backtest") if isinstance(info.get("best_backtest"), dict) else {}
+                    bbm = bb.get("metrics") if isinstance(bb.get("metrics"), dict) else {}  # type: ignore
+                    if bbm:
+                        lines.append(
+                            "- best_metrics: "
+                            + json.dumps(_pick(bbm, ["total_return", "sharpe", "max_drawdown", "total_trades"]), ensure_ascii=False)
+                        )
                 plots = info.get("plots") if isinstance(info.get("plots"), list) else []
                 if plots:
                     lines.append("- plots:")
