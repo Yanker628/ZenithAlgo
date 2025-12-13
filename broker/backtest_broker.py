@@ -36,6 +36,7 @@ class BacktestBroker(Broker):
         self.unrealized_pnl = 0.0
         self.last_prices: dict[str, float] = {}
         self.trades: list[dict] = []
+        self._seen_client_order_ids: set[str] = set()
 
         self._sim = BacktestFillSimulator(
             fee_rate=self.taker_fee,  # 简化：回测统一按吃单计费
@@ -53,6 +54,12 @@ class BacktestBroker(Broker):
         record_equity: bool = True,
         **kwargs,
     ) -> dict:
+        cid = getattr(signal, "client_order_id", None)
+        if cid:
+            if cid in self._seen_client_order_ids:
+                return {"status": "duplicate", "client_order_id": cid}
+            self._seen_client_order_ids.add(cid)
+
         raw_price = tick_price
         if raw_price is None:
             return {"status": "error", "error": "missing price"}
@@ -91,6 +98,7 @@ class BacktestBroker(Broker):
         self.trades.append(
             {
                 "ts": ts,
+                "client_order_id": getattr(signal, "client_order_id", None),
                 "symbol": signal.symbol,
                 "side": signal.side,
                 "qty": fill.exec_qty,
@@ -103,6 +111,7 @@ class BacktestBroker(Broker):
 
         return {
             "status": "filled",
+            "client_order_id": getattr(signal, "client_order_id", None),
             "symbol": signal.symbol,
             "side": signal.side,
             "qty": fill.exec_qty,
@@ -124,4 +133,3 @@ class BacktestBroker(Broker):
                 continue
             pnl += pos.qty * (price - pos.avg_price)
         return pnl
-

@@ -13,6 +13,7 @@ from broker.abstract_broker import Broker
 from shared.models.models import OrderSignal, Tick
 from algo.risk.manager import RiskManager
 from algo.strategy.base import Strategy
+from shared.utils.client_order_id import make_client_order_id
 from utils.sizer import size_signals
 
 
@@ -64,6 +65,21 @@ def prepare_signals(
     if trace is not None:
         trace.after_risk += len(risk_passed or [])
         trace.dropped_by_risk += max(0, len(sized_signals) - len(risk_passed or []))
+    if not risk_passed:
+        return []
+
+    strategy_id = getattr(strategy, "strategy_id", None) or strategy.__class__.__name__
+    for idx, sig in enumerate(risk_passed):
+        if getattr(sig, "client_order_id", None):
+            continue
+        sig.client_order_id = make_client_order_id(
+            strategy_id=str(strategy_id),
+            symbol=str(sig.symbol),
+            side=str(sig.side),
+            intent_ts=tick.ts,
+            signal_seq=idx,
+            reason=sig.reason,
+        )
     return risk_passed
 
 

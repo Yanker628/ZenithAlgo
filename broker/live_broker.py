@@ -62,6 +62,7 @@ class LiveBroker(Broker):
         self.realized_pnl_today = 0.0
         self.unrealized_pnl = 0.0
         self.symbol_rules: dict[str, SymbolRule] = {}
+        self._seen_client_order_ids: set[str] = set()
 
         if self.allow_live and self.symbols_allowlist:
             self._load_symbol_rules()
@@ -71,6 +72,12 @@ class LiveBroker(Broker):
 
     def execute(self, signal: OrderSignal, **kwargs) -> dict:
         self.logger.info("Execute signal: %s %s qty=%s reason=%s", signal.symbol, signal.side, signal.qty, signal.reason)
+
+        cid = getattr(signal, "client_order_id", None)
+        if cid:
+            if cid in self._seen_client_order_ids:
+                return {"status": "duplicate", "client_order_id": cid}
+            self._seen_client_order_ids.add(cid)
 
         if self.symbols_allowlist and signal.symbol not in self.symbols_allowlist:
             return {"status": "blocked", "reason": "symbol_not_allowed", "symbol": signal.symbol}
@@ -93,6 +100,8 @@ class LiveBroker(Broker):
             "type": "MARKET",
             "quantity": qty,
         }
+        if cid:
+            params["newClientOrderId"] = cid
         try:
             res = self._request("POST", "/api/v3/order", params)
             self.logger.info("Order placed: %s", res)
@@ -103,6 +112,8 @@ class LiveBroker(Broker):
                 self.realized_pnl_today += realized_delta
             self._maybe_log_trade(signal, price, pos)
             res["price_used"] = price
+            if cid:
+                res["client_order_id"] = cid
             return res
         except Exception as exc:
             self.logger.error("Order failed: %s", exc)
@@ -268,4 +279,3 @@ class LiveBroker(Broker):
             return None, realized_delta
         self.positions[signal.symbol] = pos
         return pos, realized_delta
-

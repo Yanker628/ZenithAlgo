@@ -62,10 +62,15 @@ def build_strategy(cfg: StrategyConfig | Mapping[str, Any] | None) -> Strategy:
 
     cls = get_strategy_cls(name)
     kwargs = _filter_init_kwargs(cls, params)
-    return cls(**kwargs)  # type: ignore[call-arg]
+    strat = cls(**kwargs)  # type: ignore[call-arg]
+    # 用于幂等下单等场景：提供稳定的策略标识（来自配置注册名）
+    try:
+        setattr(strat, "strategy_id", name)
+    except Exception:
+        pass
+    return strat
 
 
 # 默认注册
 register_strategy("simple_ma", SimpleMAStrategy)
 register_strategy("trend_filtered", TrendFilteredStrategy)
-

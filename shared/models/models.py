@@ -31,6 +31,7 @@ class OrderSignal:
     qty: float       # 数量或比例
     reason: str | None = None
     price: float | None = None  # 可选价格，供执行/日志使用
+    client_order_id: str | None = None  # 幂等/去重：同一意图可预测且可重建
 
 @dataclass
 class Position:

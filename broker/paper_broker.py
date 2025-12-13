@@ -25,11 +25,18 @@ class PaperBroker(Broker):
         self.realized_pnl_all = 0.0
         self.realized_pnl_today = 0.0
         self.unrealized_pnl = 0.0
+        self._seen_client_order_ids: set[str] = set()
 
     def get_position(self, symbol: str) -> Position | None:
         return self.positions.get(symbol)
 
     def execute(self, signal: OrderSignal, price: float | None = None, **kwargs) -> dict:
+        cid = getattr(signal, "client_order_id", None)
+        if cid:
+            if cid in self._seen_client_order_ids:
+                return {"status": "duplicate", "client_order_id": cid}
+            self._seen_client_order_ids.add(cid)
+
         signal_price = getattr(signal, "price", None)
         fill_price_raw = price if price is not None else signal_price
         if fill_price_raw is None:
@@ -104,4 +111,3 @@ class DryRunBroker(PaperBroker):
 
     def __init__(self, trade_logger: TradeLogger | None = None):
         super().__init__(mode=BrokerMode.DRY_RUN, trade_logger=trade_logger)
-

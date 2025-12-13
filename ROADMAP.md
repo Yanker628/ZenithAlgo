@@ -105,6 +105,8 @@
 
 行动（建议顺序）：
 
+- M5-1：订单幂等与去重：为所有下单引入可预测的 `client_order_id`，broker 层拒绝重复提交；
+  实盘下单把该字段透传到交易所（如 Binance `newClientOrderId`）。
 - LiveBroker Reconciliation（对账）：启动时从交易所拉取真实持仓/挂单/成交，
   与本地状态比对并同步，明确“交易所为最终真相源”。
 - 本地持久化（SQLite）：将订单生命周期与成交事件写入 SQLite（append-only + 索引），
@@ -115,6 +117,7 @@
 
 验收（Definition of Done）：
 
+- 模拟同一 tick 重放两次，下单次数不变（幂等去重生效）。
 - 模拟崩溃重启后，不会产生重复下单（在相同输入流下结果可预测）。
 - 重启后能恢复持仓/挂单/已成交的视图，并与交易所一致。
 - SQLite 文件可迁移/备份，且具备基本的查询能力（按 symbol/time/order_id）。
