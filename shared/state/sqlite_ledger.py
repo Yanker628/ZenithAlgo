@@ -70,6 +70,7 @@ class SqliteEventLedger:
               qty REAL NOT NULL,
               price REAL NOT NULL,
               fee REAL,
+              dedup_key TEXT,
               ts TEXT NOT NULL,
               raw_json TEXT NOT NULL,
               FOREIGN KEY (client_order_id) REFERENCES orders(client_order_id)
@@ -77,6 +78,16 @@ class SqliteEventLedger:
             """
         )
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_fills_cid ON fills(client_order_id);")
+        self._ensure_fills_dedup()
+
+    def _ensure_fills_dedup(self) -> None:
+        cols = [r[1] for r in self._conn.execute("PRAGMA table_info(fills);").fetchall()]
+        if "dedup_key" not in cols:
+            self._conn.execute("ALTER TABLE fills ADD COLUMN dedup_key TEXT;")
+        # 允许 NULL；仅对非空 key 做唯一约束，便于接入交易所 trade id。
+        self._conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_fills_dedup_key ON fills(dedup_key) WHERE dedup_key IS NOT NULL;"
+        )
 
     def has_order(self, client_order_id: str) -> bool:
         row = self._conn.execute(
@@ -119,6 +130,44 @@ class SqliteEventLedger:
         except sqlite3.IntegrityError:
             return False
 
+    def upsert_order(
+        self,
+        *,
+        client_order_id: str,
+        symbol: str,
+        side: str,
+        qty: float,
+        price: float | None,
+        status: str,
+        created_at: str | None,
+        raw: Any,
+    ) -> None:
+        created_at = created_at or _utc_now_iso()
+        self._conn.execute(
+            """
+            INSERT INTO orders (
+              client_order_id, symbol, side, qty, price, status, created_at, raw_signal_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(client_order_id) DO UPDATE SET
+              symbol=excluded.symbol,
+              side=excluded.side,
+              qty=excluded.qty,
+              price=excluded.price,
+              status=excluded.status,
+              raw_signal_json=excluded.raw_signal_json;
+            """,
+            (
+                client_order_id,
+                symbol,
+                side,
+                float(qty),
+                float(price) if price is not None else None,
+                str(status),
+                created_at,
+                _json_dumps(raw),
+            ),
+        )
+
     def set_order_status(self, client_order_id: str, status: str) -> None:
         self._conn.execute(
             "UPDATE orders SET status = ? WHERE client_order_id = ?;",
@@ -133,14 +182,15 @@ class SqliteEventLedger:
         qty: float,
         price: float,
         fee: float | None,
+        dedup_key: str | None = None,
         ts: str | None = None,
         raw: Any,
     ) -> None:
         ts = ts or _utc_now_iso()
         self._conn.execute(
             """
-            INSERT INTO fills (client_order_id, symbol, qty, price, fee, ts, raw_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?);
+            INSERT OR IGNORE INTO fills (client_order_id, symbol, qty, price, fee, dedup_key, ts, raw_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
             """,
             (
                 client_order_id,
@@ -148,6 +198,7 @@ class SqliteEventLedger:
                 float(qty),
                 float(price),
                 float(fee) if fee is not None else None,
+                dedup_key,
                 ts,
                 _json_dumps(raw),
             ),
@@ -156,6 +207,10 @@ class SqliteEventLedger:
     def load_all_client_order_ids(self) -> set[str]:
         rows = self._conn.execute("SELECT client_order_id FROM orders;").fetchall()
         return {str(r[0]) for r in rows}
+
+    def load_order_status_map(self) -> dict[str, str]:
+        rows = self._conn.execute("SELECT client_order_id, status FROM orders;").fetchall()
+        return {str(cid): str(status) for cid, status in rows}
 
     def iter_fills_with_order_side(self) -> Iterable[dict[str, Any]]:
         cur = self._conn.execute(
@@ -171,4 +226,3 @@ class SqliteEventLedger:
         cols = [c[0] for c in cur.description]
         for row in cur.fetchall():
             yield {cols[i]: row[i] for i in range(len(cols))}
-

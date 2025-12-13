@@ -80,6 +80,7 @@ def validate_raw_config(cfg: dict[str, Any]) -> None:
         "mode",
         "equity_base",
         "ledger",
+        "recovery",
         "exchange",
         "risk",
         "strategy",
@@ -118,6 +119,11 @@ def validate_raw_config(cfg: dict[str, Any]) -> None:
     if ledger is not None:
         ledger = _expect_dict(ledger, ctx="config.ledger")
         _validate_ledger(ledger)
+
+    recovery = cfg.get("recovery")
+    if recovery is not None:
+        recovery = _expect_dict(recovery, ctx="config.recovery")
+        _validate_recovery(recovery)
 
 
 def _validate_exchange(exchange: dict[str, Any]) -> None:
@@ -230,6 +236,17 @@ def _validate_ledger(ledger: dict[str, Any]) -> None:
         _expect_bool(ledger["enabled"], ctx="config.ledger.enabled")
     if "path" in ledger and ledger["path"] is not None:
         _expect_str(ledger["path"], ctx="config.ledger.path")
+
+
+def _validate_recovery(recovery: dict[str, Any]) -> None:
+    allowed = {"enabled", "mode"}
+    _ensure_allowed_keys(recovery, allowed=allowed, ctx="config.recovery")
+    if "enabled" in recovery and recovery["enabled"] is not None:
+        _expect_bool(recovery["enabled"], ctx="config.recovery.enabled")
+    if "mode" in recovery and recovery["mode"] is not None:
+        mode = _expect_str(recovery["mode"], ctx="config.recovery.mode").strip().lower()
+        if mode not in {"observe_only", "trade"}:
+            raise ValueError("config.recovery.mode must be 'observe_only' or 'trade'")
 
 
 def _validate_fees(fees: dict[str, Any]) -> None:

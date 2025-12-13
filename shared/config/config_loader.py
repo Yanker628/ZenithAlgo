@@ -53,6 +53,7 @@ class RawConfig(RawConfigRequired, total=False):
     backtest: dict[str, Any]
     sizing: dict[str, Any]
     ledger: dict[str, Any]
+    recovery: dict[str, Any]
 
 
 @dataclass
@@ -98,6 +99,7 @@ class AppConfig:
     backtest: dict[str, Any] | None = None
     sizing: dict[str, Any] | None = None
     ledger: dict[str, Any] | None = None
+    recovery: dict[str, Any] | None = None
 
 def _load_env_file(env_path: Path):
     if not env_path.exists():
@@ -198,6 +200,7 @@ def load_config(path: str, load_env: bool = True, expand_env: bool = True) -> Ap
         backtest_cfg = cfg.get("backtest")
         sizing_cfg = cfg.get("sizing")
         ledger_cfg = cfg.get("ledger")
+        recovery_cfg = cfg.get("recovery")
         # 确保 backtest 至少有 symbol 键，便于回测/测试访问
         if isinstance(backtest_cfg, dict) and "symbol" not in backtest_cfg:
             backtest_cfg["symbol"] = symbol
@@ -216,4 +219,5 @@ def load_config(path: str, load_env: bool = True, expand_env: bool = True) -> Ap
         backtest=backtest_cfg,
         sizing=sizing_cfg if isinstance(sizing_cfg, dict) else None,
         ledger=ledger_cfg if isinstance(ledger_cfg, dict) else None,
+        recovery=recovery_cfg if isinstance(recovery_cfg, dict) else None,
     )

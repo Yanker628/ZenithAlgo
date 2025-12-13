@@ -122,6 +122,15 @@
 - 重启后能恢复持仓/挂单/已成交的视图，并与交易所一致。
 - SQLite 文件可迁移/备份，且具备基本的查询能力（按 symbol/time/order_id）。
 
+当前落地（已完成）：
+
+- M5-1：`OrderSignal.client_order_id` 可预测生成；broker 层去重；
+  实盘下单透传 Binance `newClientOrderId`。
+- M5-2：SQLite 本地事件账本（`shared/state/sqlite_ledger.py`）落盘订单与成交；
+  重启恢复 `_seen_client_order_ids`，实现跨进程幂等。
+- M5-3：启动对账 + 安全保险丝（`broker/live_broker.py:startup_reconcile`）；
+  新增 `config.recovery.enabled/mode`，对账未完成或异常自动降级 `observe_only` 并禁止下单。
+
 #### M6：数据层升级（Data Layer）
 
 痛点：CSV 在多品种/高频场景下读写慢、管理散；研究与回测的 I/O 成为瓶颈。

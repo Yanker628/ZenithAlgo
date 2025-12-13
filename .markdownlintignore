@@ -1,3 +1,5 @@
 results/**
+dataset/experiments/**
+dataset/state/**
 .venv/**
 .pytest_cache/**

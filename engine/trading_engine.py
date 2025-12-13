@@ -52,6 +52,7 @@ class TradingEngine(BaseEngine):
         trade_logger = TradeLogger()
         broker = self._build_broker(cfg, trade_logger=trade_logger)
         self.broker = broker
+        self._maybe_startup_reconcile(cfg=cfg, broker=broker, logger=logger)
 
         market_client = self._build_market_client(cfg, logger=logger)
         sizing_cfg = resolve_sizing_cfg(cfg)
@@ -91,6 +92,13 @@ class TradingEngine(BaseEngine):
             ledger_enabled = bool(ledger_cfg.get("enabled", True))
             ledger_path = str(ledger_cfg.get("path") or ledger_path)
         ledger_path = ledger_path if ledger_enabled else None
+
+        recovery_cfg = getattr(cfg, "recovery", None)
+        recovery_enabled = True
+        recovery_mode = "observe_only"
+        if isinstance(recovery_cfg, dict):
+            recovery_enabled = bool(recovery_cfg.get("enabled", True))
+            recovery_mode = str(recovery_cfg.get("mode") or recovery_mode).strip().lower()
         if mode == BrokerMode.DRY_RUN:
             return DryRunBroker(trade_logger, ledger_path=ledger_path)
         if mode == BrokerMode.PAPER:
@@ -109,7 +117,21 @@ class TradingEngine(BaseEngine):
             max_price_deviation_pct=getattr(cfg.exchange, "max_price_deviation_pct", None),
             trade_logger=trade_logger,
             ledger_path=ledger_path,
+            recovery_enabled=recovery_enabled,
+            recovery_mode=recovery_mode,
         )
+
+    @staticmethod
+    def _maybe_startup_reconcile(*, cfg, broker: Broker, logger) -> None:
+        if not isinstance(broker, LiveBroker):
+            return
+        if not getattr(broker, "recovery_enabled", False):
+            return
+        symbols = list(getattr(cfg.exchange, "symbols_allowlist", None) or [])
+        if not symbols:
+            symbols = [cfg.symbol]
+        summary = broker.startup_reconcile(symbols=symbols)
+        logger.info("Startup reconcile summary: %s", summary)
 
     @staticmethod
     def _build_market_client(cfg, *, logger) -> Any:

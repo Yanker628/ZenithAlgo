@@ -12,6 +12,7 @@ import hmac
 import math
 import time
 from datetime import datetime, timezone
+from typing import Any
 from urllib.parse import urlencode
 
 import requests
@@ -44,6 +45,8 @@ class LiveBroker(Broker):
         trade_logger: TradeLogger | None = None,
         max_price_deviation_pct: float | None = None,
         ledger_path: str | None = None,
+        recovery_enabled: bool = True,
+        recovery_mode: str = "observe_only",
     ):
         self.base_url = base_url
         self.api_key = api_key
@@ -69,6 +72,12 @@ class LiveBroker(Broker):
         if self._ledger:
             self._seen_client_order_ids = self._ledger.load_all_client_order_ids()
 
+        self.recovery_enabled = bool(recovery_enabled)
+        self.recovery_mode = str(recovery_mode).strip().lower()
+        self.reconciled = False
+        self.safe_to_trade = False
+        self.reconcile_error: str | None = None
+
         if self.allow_live and self.symbols_allowlist:
             self._load_symbol_rules()
 
@@ -77,6 +86,12 @@ class LiveBroker(Broker):
 
     def execute(self, signal: OrderSignal, **kwargs) -> dict:
         self.logger.info("Execute signal: %s %s qty=%s reason=%s", signal.symbol, signal.side, signal.qty, signal.reason)
+
+        if self.recovery_enabled:
+            if self.recovery_mode == "observe_only":
+                return {"status": "blocked", "reason": "observe_only"}
+            if self.recovery_mode == "trade" and (not self.reconciled or not self.safe_to_trade):
+                return {"status": "blocked", "reason": "recovery_not_ready"}
 
         cid = getattr(signal, "client_order_id", None)
         if cid:
@@ -132,7 +147,33 @@ class LiveBroker(Broker):
             if cid:
                 res["client_order_id"] = cid
                 if self._ledger:
-                    self._ledger.set_order_status(cid, "SUBMITTED")
+                    status = str(res.get("status") or "SUBMITTED").upper()
+                    self._ledger.set_order_status(cid, status)
+                    fills = res.get("fills") or []
+                    if isinstance(fills, list) and fills:
+                        for i, f in enumerate(fills):
+                            try:
+                                fee = float(f.get("commission") or 0.0)
+                            except Exception:
+                                fee = 0.0
+                            try:
+                                exec_price = float(f.get("price") or price or 0.0)
+                            except Exception:
+                                exec_price = float(price or 0.0)
+                            try:
+                                exec_qty = float(f.get("qty") or signal.qty)
+                            except Exception:
+                                exec_qty = float(signal.qty)
+                            self._ledger.append_fill(
+                                client_order_id=cid,
+                                symbol=signal.symbol,
+                                qty=exec_qty,
+                                price=exec_price,
+                                fee=fee,
+                                dedup_key=f"binance:order_resp:{cid}:{i}",
+                                ts=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                                raw=f,
+                            )
             return res
         except Exception as exc:
             self.logger.error("Order failed: %s", exc)
@@ -140,7 +181,170 @@ class LiveBroker(Broker):
                 self._ledger.set_order_status(cid, "ERROR")
             return {"status": "error", "error": str(exc)}
 
-    def sync_positions(self) -> None:
+    def startup_reconcile(self, *, symbols: list[str] | None = None, trades_limit: int = 50) -> dict[str, Any]:
+        """启动对账（最小可用版）。
+
+        - 交易所为最终真相源（positions/open orders）。
+        - ledger 为可恢复缓存：补齐缺失订单/成交，标记本地“悬空订单”。
+        - 对账失败或存在无法自动修正的不一致时，自动进入 observe_only。
+        """
+        symbols = symbols or (list(self.symbols_allowlist) if self.symbols_allowlist else [])
+        if not symbols:
+            symbols = []
+
+        self.reconcile_error = None
+        self.reconciled = False
+        self.safe_to_trade = False
+        if not self.recovery_enabled:
+            self.reconciled = True
+            self.safe_to_trade = True
+            return {"ok": True, "skipped": True}
+        if self._ledger is None:
+            self.recovery_mode = "observe_only"
+            self.reconcile_error = "ledger_not_configured"
+            return {"ok": False, "error": self.reconcile_error}
+
+        summary: dict[str, Any] = {
+            "ok": False,
+            "symbols": symbols,
+            "open_orders_seen": 0,
+            "open_orders_upserted": 0,
+            "fills_appended": 0,
+            "local_marked_lost": 0,
+            "errors": [],
+        }
+
+        try:
+            self.sync_positions(strict=True)
+
+            open_cids: set[str] = set()
+            for sym in symbols:
+                res = self._request("GET", "/api/v3/openOrders", {"symbol": sym})
+                orders = res if isinstance(res, list) else (res.get("orders") if isinstance(res, dict) else [])
+                if not isinstance(orders, list):
+                    continue
+                for o in orders:
+                    if not isinstance(o, dict):
+                        continue
+                    cid = str(o.get("clientOrderId") or o.get("newClientOrderId") or "")
+                    if not cid:
+                        cid = f"binance:{sym}:order:{o.get('orderId') or 'UNKNOWN'}"
+                    open_cids.add(cid)
+                    summary["open_orders_seen"] += 1
+                    self._ledger.upsert_order(
+                        client_order_id=cid,
+                        symbol=str(o.get("symbol") or sym),
+                        side=str(o.get("side") or "").lower(),
+                        qty=float(o.get("origQty") or 0.0),
+                        price=float(o.get("price") or 0.0) if o.get("price") is not None else None,
+                        status=str(o.get("status") or "OPEN").upper(),
+                        created_at=None,
+                        raw=o,
+                    )
+                    summary["open_orders_upserted"] += 1
+
+            # 本地存在但交易所不存在的“悬空订单”：先标记为 LOST，并触发安全保险丝
+            status_map = self._ledger.load_order_status_map()
+            for cid, st in status_map.items():
+                if cid in open_cids:
+                    continue
+                if str(st).upper() in {"NEW", "SUBMITTED", "OPEN"}:
+                    self._ledger.set_order_status(cid, "LOST")
+                    summary["local_marked_lost"] += 1
+
+            # 最近成交：尽量补齐到 ledger（以 trade id 做幂等去重）
+            for sym in symbols:
+                res = self._request("GET", "/api/v3/myTrades", {"symbol": sym, "limit": int(trades_limit)})
+                trades = res if isinstance(res, list) else (res.get("trades") if isinstance(res, dict) else [])
+                if not isinstance(trades, list):
+                    continue
+                for t in trades:
+                    if not isinstance(t, dict):
+                        continue
+                    trade_id = t.get("id")
+                    dedup_key = f"binance:trade:{sym}:{trade_id}"
+                    order_id = t.get("orderId")
+                    cid = None
+                    side = "buy" if bool(t.get("isBuyer")) else "sell"
+                    if order_id is not None:
+                        try:
+                            od = self._request("GET", "/api/v3/order", {"symbol": sym, "orderId": int(order_id)})
+                            if isinstance(od, dict):
+                                cid = od.get("clientOrderId") or od.get("origClientOrderId")
+                                side = str(od.get("side") or side).lower()
+                                self._ledger.upsert_order(
+                                    client_order_id=str(cid) if cid else f"binance:{sym}:order:{order_id}",
+                                    symbol=str(od.get("symbol") or sym),
+                                    side=str(side),
+                                    qty=float(od.get("origQty") or 0.0),
+                                    price=float(od.get("price") or 0.0) if od.get("price") is not None else None,
+                                    status=str(od.get("status") or "UNKNOWN").upper(),
+                                    created_at=None,
+                                    raw=od,
+                                )
+                        except Exception as exc:
+                            summary["errors"].append(f"order_lookup_failed:{exc}")
+                    if not cid:
+                        cid = f"binance:{sym}:order:{order_id or 'UNKNOWN'}"
+                        self._ledger.upsert_order(
+                            client_order_id=str(cid),
+                            symbol=sym,
+                            side=side,
+                            qty=float(t.get("qty") or 0.0),
+                            price=float(t.get("price") or 0.0),
+                            status="FILLED",
+                            created_at=None,
+                            raw={"trade": t},
+                        )
+
+                    fee = None
+                    if "commission" in t:
+                        try:
+                            fee = float(t.get("commission") or 0.0)
+                        except Exception:
+                            fee = None
+                    ts_iso = None
+                    if "time" in t:
+                        try:
+                            ts_iso = datetime.fromtimestamp(int(t["time"]) / 1000, tz=timezone.utc).isoformat().replace(
+                                "+00:00", "Z"
+                            )
+                        except Exception:
+                            ts_iso = None
+                    self._ledger.append_fill(
+                        client_order_id=str(cid),
+                        symbol=sym,
+                        qty=float(t.get("qty") or 0.0),
+                        price=float(t.get("price") or 0.0),
+                        fee=fee,
+                        dedup_key=dedup_key,
+                        ts=ts_iso,
+                        raw=t,
+                    )
+                    summary["fills_appended"] += 1
+
+            summary["ok"] = True
+            self.reconciled = True
+            # 对账过程中可能补齐了“交易所存在但本地缺失”的订单，刷新幂等集合。
+            self._seen_client_order_ids = self._ledger.load_all_client_order_ids()
+            # 安全保险丝：存在悬空订单时默认降级 observe_only
+            if summary["local_marked_lost"] > 0:
+                self.safe_to_trade = False
+                if self.recovery_mode == "trade":
+                    self.recovery_mode = "observe_only"
+                return summary
+
+            self.safe_to_trade = True
+            return summary
+        except Exception as exc:
+            self.reconcile_error = str(exc)
+            summary["errors"].append(self.reconcile_error)
+            self.recovery_mode = "observe_only"
+            self.reconciled = False
+            self.safe_to_trade = False
+            return summary
+
+    def sync_positions(self, *, strict: bool = False) -> None:
         """与交易所对账，刷新本地持仓（仅量，不含均价）。"""
         try:
             res = self._request("GET", "/api/v3/account", {})
@@ -166,6 +370,8 @@ class LiveBroker(Broker):
             self.logger.info("Positions synced from exchange: %s", list(self.positions.keys()))
         except Exception as exc:
             self.logger.warning("sync_positions failed: %s", exc)
+            if strict:
+                raise
 
     def _sign(self, params: dict) -> str:
         qs = urlencode(params)
