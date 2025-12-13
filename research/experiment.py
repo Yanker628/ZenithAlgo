@@ -277,6 +277,10 @@ def run_backtest_experiment(cfg_path: str) -> ExperimentResult:
         diagnostics=diagnostics,
         policy=policy,
         artifacts=artifacts,
+        details={
+            "signal_trace": summary.get("signal_trace") if isinstance(summary, dict) else None,
+            "data_health": summary.get("data_health") if isinstance(summary, dict) else None,
+        },
     )
     _write_json(
         out_dir / "results.json",
