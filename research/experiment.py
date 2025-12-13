@@ -51,7 +51,7 @@ def _git_info() -> dict[str, Any]:
             .strip()
         )
     except Exception:
-        sha = None
+        sha = "UNKNOWN"
     try:
         status = (
             subprocess.check_output(["git", "status", "--porcelain"], stderr=subprocess.DEVNULL)
@@ -60,8 +60,8 @@ def _git_info() -> dict[str, Any]:
         )
         dirty = bool(status)
     except Exception:
-        dirty = None
-    return {"sha": sha, "dirty": dirty}
+        dirty = False
+    return {"sha": sha or "UNKNOWN", "dirty": bool(dirty)}
 
 
 def _config_hash(cfg_path: str) -> str:
@@ -160,7 +160,8 @@ def _dump_effective_cfg(cfg_obj, path: Path) -> None:
         "exchange": asdict(exchange_obj) if exchange_obj is not None else None,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    payload = sanitize_for_json(payload)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str, allow_nan=False), encoding="utf-8")
 
 
 def _ensure_config_snapshot(cfg_path: str, out_dir: Path) -> None:

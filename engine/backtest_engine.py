@@ -32,9 +32,17 @@ from analysis.visualizations.plotter import plot_drawdown, plot_equity_curve, pl
 BASE_CANDLE_COLS = {"ts", "symbol", "open", "high", "low", "close", "volume"}
 
 
-def parse_iso(val: str) -> datetime:
-    """解析 ISO 时间字符串为 UTC datetime。"""
-    return datetime.fromisoformat(val.replace("Z", "+00:00")).astimezone(timezone.utc)
+def parse_iso(val: str | datetime | date) -> datetime:
+    """解析 ISO 时间字符串（或 datetime/date）为 UTC datetime。"""
+    if isinstance(val, datetime):
+        dt = val
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    if isinstance(val, date) and not isinstance(val, datetime):
+        return datetime(val.year, val.month, val.day, tzinfo=timezone.utc)
+    s = str(val)
+    return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
 def build_backtest_summary(broker: BacktestBroker, last_prices: Dict[str, float]) -> dict:

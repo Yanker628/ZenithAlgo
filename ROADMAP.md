@@ -74,7 +74,7 @@
 
 行动（建议顺序）：
 
-- 引入 Pydantic（或等价方案）：将 `config.yml` 的关键段落建模为 `BaseModel`，
+- 引入 Pydantic（或等价方案）：将 `config.yml` 的关键段落建模为 schema，
   作为唯一配置入口（校验、默认值、字段弃用策略）。
 - 收敛回测/实验输出：把 `meta.json` / `summary.json` / `results.json` 的结构
   固化为版本化 schema（例如 `schema_version`），并提供离线校验。
@@ -92,6 +92,11 @@
 - 错误配置在启动阶段失败（而不是跑到中途报错）。
 - 实验产物可离线校验通过，并具备明确的 schema version。
 - `SignalPacket` 能贯穿 backtest 与 runner 的记录链路（至少落盘/日志可见）。
+
+当前落地（已完成一部分）：
+
+- 配置 schema 校验：`shared/config/validation.py` 在启动阶段对顶层/exchange/risk/backtest 做严格校验，未知 key 直接失败。
+- 实验产物 schema 版本化：`research/experiment.py` 为 `meta.json/summary.json/results.json` 写入 `schema_version`，并补齐复现骨钉字段。
 
 #### M5：状态管理与灾难恢复（State Recovery）
 

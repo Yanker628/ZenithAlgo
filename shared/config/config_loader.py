@@ -11,6 +11,8 @@ from typing import Any, TypedDict, cast
 
 import yaml
 
+from shared.config.validation import validate_raw_config
+
 
 class ExchangeConfigDict(TypedDict):
     name: str
@@ -176,6 +178,7 @@ def load_config(path: str, load_env: bool = True, expand_env: bool = True) -> Ap
         return value
 
     cfg = cast(RawConfig, _expand_env(raw_cfg))
+    validate_raw_config(cast(dict[str, Any], cfg))
 
     try:
         exchange_cfg = ExchangeConfig(**cast(dict[str, Any], cfg["exchange"]))
