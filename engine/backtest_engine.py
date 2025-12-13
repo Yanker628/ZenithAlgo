@@ -14,6 +14,7 @@ import pandas as pd
 
 from broker.backtest_broker import BacktestBroker
 from engine.base_engine import BaseEngine, EngineResult
+from engine.sources.event_source import PandasFrameEventSource
 from engine.signal_pipeline import SignalTrace, prepare_signals
 from shared.models.models import OrderSignal, Tick
 from algo.factors.registry import apply_factors, build_factors
@@ -204,8 +205,8 @@ class BacktestEngine(BaseEngine):
         day_start_equity = equity_base
         signal_trace = SignalTrace()
 
-        for _, row in candles_df.iterrows():
-            tick = _row_to_tick(row, feature_cols=feature_cols)
+        def _on_tick(tick: Tick) -> None:
+            nonlocal last_ts, current_day, day_start_equity
             last_ts = tick.ts
 
             current_day, day_start_equity = self._maybe_roll_day(
@@ -250,6 +251,9 @@ class BacktestEngine(BaseEngine):
 
             if record_equity_each_bar:
                 self._record_mtm_equity(broker=broker, last_prices=last_prices, ts=tick.ts)
+
+        source = PandasFrameEventSource(candles_df, feature_cols=feature_cols)
+        self.run_loop(source=source, on_tick=_on_tick, logger=logger)
 
         # 结束处理：强制平仓与最终权益点
         self._maybe_flatten_on_end(bt_cfg, broker=broker, last_prices=last_prices, last_ts=last_ts)

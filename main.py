@@ -27,7 +27,7 @@ class CliArgs:
     n_segments: int = 3
     train_ratio: float = 0.7
     min_trades: int = 10
-    output_dir: str = "dataset/walkforward"
+    output_dir: str = "results/walkforward_engine"
     include_live_tests: bool = False
 
 
@@ -73,7 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_wf.add_argument("--n-segments", type=int, default=3)
     p_wf.add_argument("--train-ratio", type=float, default=0.7)
     p_wf.add_argument("--min-trades", type=int, default=10)
-    p_wf.add_argument("--output-dir", type=str, default="dataset/walkforward")
+    p_wf.add_argument("--output-dir", type=str, default="results/walkforward_engine")
 
     p_test = sub.add_parser("test", help="运行 pytest（默认跳过 live）")
     _add_config_arg(p_test, default=argparse.SUPPRESS)
@@ -111,7 +111,7 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
         n_segments=int(getattr(ns, "n_segments", 3)),
         train_ratio=float(getattr(ns, "train_ratio", 0.7)),
         min_trades=int(getattr(ns, "min_trades", 10)),
-        output_dir=str(getattr(ns, "output_dir", "dataset/walkforward")),
+        output_dir=str(getattr(ns, "output_dir", "results/walkforward_engine")),
         include_live_tests=bool(getattr(ns, "include_live", False)),
     )
 

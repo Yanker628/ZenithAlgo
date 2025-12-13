@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
+
+from engine.sources.event_source import EventSource
 
 
 @dataclass(frozen=True)
@@ -27,3 +29,28 @@ class BaseEngine(ABC):
     def run(self) -> EngineResult:
         raise NotImplementedError
 
+    def run_loop(
+        self,
+        *,
+        source: EventSource,
+        on_tick: Callable[[Any], None],
+        max_events: int | None = None,
+        logger=None,
+    ) -> None:
+        """统一事件循环：对所有模式（回测/实盘/模拟）复用。"""
+        if logger:
+            logger.info("Engine loop start: source=%s", source.__class__.__name__)
+        source.setup()
+        try:
+            n = 0
+            for tick in source.events():
+                on_tick(tick)
+                n += 1
+                if max_events is not None and n >= max_events:
+                    if logger:
+                        logger.info("Engine loop reached max_events=%s, stop.", max_events)
+                    break
+        finally:
+            source.teardown()
+            if logger:
+                logger.info("Engine loop end.")

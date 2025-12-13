@@ -45,7 +45,7 @@ class WalkforwardEngine(BaseEngine):
         n_segments: int = 3,
         train_ratio: float = 0.7,
         min_trades: int = 10,
-        output_dir: str = "dataset/walkforward",
+        output_dir: str = "results/walkforward_engine",
         artifacts_base_dir: str | None = None,
     ):
         self._cfg_path = cfg_path
@@ -71,6 +71,7 @@ class WalkforwardEngine(BaseEngine):
         results: dict[str, Any] = {"segments": [], "overall": {}}
         out_dir = Path(self._output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
+        artifacts: dict[str, Any] = {"dir": str(out_dir), "segments": []}
 
         sweep_cfg = bt_cfg.get("sweep", {}) or {}
         mode = str(sweep_cfg.get("mode", "grid")).lower()
@@ -154,6 +155,13 @@ class WalkforwardEngine(BaseEngine):
                     "artifacts_dir": artifacts_dir,
                 }
             )
+            artifacts["segments"].append(
+                {
+                    "idx": idx,
+                    "train_csv": str(sweep_csv),
+                    "test_backtest_dir": artifacts_dir,
+                }
+            )
             logger.info(
                 "Segment %s metrics: total_return=%s sharpe=%s max_drawdown=%s trades=%s",
                 idx,
@@ -165,7 +173,7 @@ class WalkforwardEngine(BaseEngine):
 
         results["overall"] = self._build_overall(results["segments"])
         logger.info("Walkforward overall: %s", results.get("overall"))
-        return EngineResult(summary=results, artifacts={"output_dir": str(out_dir)})
+        return EngineResult(summary=results, artifacts=artifacts)
 
     @staticmethod
     def _build_overall(segments: list[dict]) -> dict[str, Any]:

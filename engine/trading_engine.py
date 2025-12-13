@@ -12,6 +12,7 @@ from broker.abstract_broker import BrokerMode, Broker
 from broker.live_broker import LiveBroker
 from broker.paper_broker import DryRunBroker, PaperBroker
 from engine.base_engine import BaseEngine, EngineResult
+from engine.sources.market_event_source import MarketEventSource
 from data.client import BinanceMarketClient, FakeMarketClient
 from algo.risk.manager import RiskManager
 from engine.signal_pipeline import prepare_signals
@@ -136,11 +137,8 @@ class TradingEngine(BaseEngine):
         last_pnl_log_ts: datetime | None = None
         log_interval_secs = 5
 
-        tick_stream = market_client.tick_stream(cfg.symbol)
-        tick_count = 0
-
-        for tick in tick_stream:
-            tick_count += 1
+        def _on_tick(tick) -> None:
+            nonlocal current_trading_day, last_pnl_log_ts
             self.last_prices[tick.symbol] = tick.price
 
             tick_ts = tick.ts or datetime.now(timezone.utc)
@@ -180,9 +178,8 @@ class TradingEngine(BaseEngine):
                 logger=logger,
             )
 
-            if self._max_ticks is not None and tick_count >= self._max_ticks:
-                logger.info("Reached max_ticks=%s, exiting trading engine.", self._max_ticks)
-                break
+        source = MarketEventSource(market_client=market_client, symbol=cfg.symbol, logger=logger)
+        self.run_loop(source=source, on_tick=_on_tick, max_events=self._max_ticks, logger=logger)
 
     @staticmethod
     def _maybe_roll_day(

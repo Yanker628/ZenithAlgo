@@ -16,7 +16,14 @@ from utils.param_search import grid_search, random_search, SweepResult
 from analysis.visualizations.plotter import plot_sweep_heatmap
 
 
-def _run_sweep_for_symbol(cfg_path: str, symbol: str, sweep_cfg: dict, *, logger=None) -> List[SweepResult]:
+def _run_sweep_for_symbol(
+    *,
+    cfg_path: str,
+    symbol: str,
+    sweep_cfg: dict,
+    output_dir: Path,
+    logger=None,
+) -> tuple[List[SweepResult], dict[str, Any]]:
     """对单个 symbol 跑参数搜索。
 
     Parameters
@@ -51,10 +58,9 @@ def _run_sweep_for_symbol(cfg_path: str, symbol: str, sweep_cfg: dict, *, logger
         "max_drawdown": float(obj.get("max_drawdown_weight", 0.0)),
     }
 
-    output_csv = sweep_cfg.get("output_csv")  # 你以后想把结果落盘可以在 yml 里加
-    if not output_csv:
-        interval = cfg.backtest.get("interval", "NA")  # type: ignore[index]
-        output_csv = f"dataset/research/ma_sweep_{symbol}_{interval}.csv"
+    interval = cfg.backtest.get("interval", "NA")  # type: ignore[index]
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_csv = str(output_dir / f"{symbol}_{interval}_sweep.csv")
 
     # 过滤/惩罚配置
     min_trades = sweep_cfg.get("min_trades")
@@ -69,7 +75,7 @@ def _run_sweep_for_symbol(cfg_path: str, symbol: str, sweep_cfg: dict, *, logger
 
     if mode == "random":
         n_samples = int(sweep_cfg.get("n_random", 20))
-        return random_search(
+        results = random_search(
             cfg_path,
             param_grid,
             n_samples,
@@ -79,6 +85,7 @@ def _run_sweep_for_symbol(cfg_path: str, symbol: str, sweep_cfg: dict, *, logger
             filters=filters,
             low_trades_penalty=low_trades_penalty,
         )
+        return results, {"csv": output_csv, "heatmap_png": None}
     else:
         results = grid_search(
             cfg_path,
@@ -90,15 +97,17 @@ def _run_sweep_for_symbol(cfg_path: str, symbol: str, sweep_cfg: dict, *, logger
             low_trades_penalty=low_trades_penalty,
         )
         # 生成热力图（可选）
+        heatmap_path = None
         try:
-            stem = Path(output_csv).stem.replace("ma_sweep_", "")
-            heatmap_path = Path("plots") / f"{stem}_heatmap.png"
-            heatmap_path.parent.mkdir(parents=True, exist_ok=True)
+            stem = Path(output_csv).stem
+            plots_dir = output_dir / "plots"
+            plots_dir.mkdir(parents=True, exist_ok=True)
+            heatmap_path = plots_dir / f"{stem}_heatmap.png"
             plot_sweep_heatmap(output_csv, save_path=str(heatmap_path), filters=filters)
         except Exception as exc:
             if logger is not None:
                 logger.warning("热力图生成失败，已跳过：%s", exc)
-        return results
+        return results, {"csv": output_csv, "heatmap_png": str(heatmap_path) if heatmap_path else None}
 
 
 class OptimizationEngine(BaseEngine):
@@ -108,9 +117,16 @@ class OptimizationEngine(BaseEngine):
     - 否则：返回单次回测 summary（等价 `BacktestEngine`）。
     """
 
-    def __init__(self, *, cfg_path: str = "config/config.yml", top_n: int = 5):
+    def __init__(
+        self,
+        *,
+        cfg_path: str = "config/config.yml",
+        top_n: int = 5,
+        artifacts_dir: str | Path | None = None,
+    ):
         self._cfg_path = cfg_path
         self._top_n = int(top_n)
+        self._artifacts_dir = artifacts_dir
 
     def run(self) -> EngineResult:
         logger = setup_logger("optimize")
@@ -127,13 +143,26 @@ class OptimizationEngine(BaseEngine):
         symbols_cfg = bt_cfg.get("symbols")
         symbols = [str(s) for s in symbols_cfg] if symbols_cfg else [str(bt_cfg.get("symbol"))]
 
+        base_out_dir = Path(self._artifacts_dir) if self._artifacts_dir is not None else Path("results") / "sweep_engine"
+        base_out_dir.mkdir(parents=True, exist_ok=True)
+
         all_results: dict[str, list[dict[str, Any]]] = {}
+        artifacts: dict[str, Any] = {"dir": str(base_out_dir), "symbols": {}}
         for sym in symbols:
-            results = _run_sweep_for_symbol(self._cfg_path, sym, sweep_cfg, logger=logger)
+            sym_dir = base_out_dir / sym
+            logger.info("Sweep start: symbol=%s out_dir=%s", sym, sym_dir)
+            results, sym_art = _run_sweep_for_symbol(
+                cfg_path=self._cfg_path,
+                symbol=sym,
+                sweep_cfg=sweep_cfg,
+                output_dir=sym_dir,
+                logger=logger,
+            )
             res_sorted = sorted(results, key=lambda r: r.score, reverse=True)
             all_results[sym] = [
                 {"symbol": r.symbol, "params": r.params, "metrics": r.metrics, "score": r.score, "passed": r.passed}
                 for r in res_sorted[: self._top_n]
             ]
+            artifacts["symbols"][sym] = sym_art
 
-        return EngineResult(summary={"results": all_results, "top_n": self._top_n})
+        return EngineResult(summary={"results": all_results, "top_n": self._top_n}, artifacts=artifacts)
