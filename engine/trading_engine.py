@@ -107,9 +107,28 @@ class TradingEngine(BaseEngine):
             recovery_enabled = bool(recovery_cfg.get("enabled", True))
             recovery_mode = str(recovery_cfg.get("mode") or recovery_mode).strip().lower()
         if mode == BrokerMode.DRY_RUN:
-            return DryRunBroker(trade_logger, ledger_path=ledger_path)
+            return DryRunBroker(
+                trade_logger,
+                ledger_path=ledger_path,
+                base_url=cfg.exchange.base_url,
+                symbols_allowlist=cfg.exchange.symbols_allowlist,
+                min_notional=cfg.exchange.min_notional,
+                min_qty=cfg.exchange.min_qty,
+                qty_step=cfg.exchange.qty_step,
+                price_step=cfg.exchange.price_step,
+            )
         if mode == BrokerMode.PAPER:
-            return PaperBroker(mode=BrokerMode.PAPER, trade_logger=trade_logger, ledger_path=ledger_path)
+            return PaperBroker(
+                mode=BrokerMode.PAPER,
+                trade_logger=trade_logger,
+                ledger_path=ledger_path,
+                base_url=cfg.exchange.base_url,
+                symbols_allowlist=cfg.exchange.symbols_allowlist,
+                min_notional=cfg.exchange.min_notional,
+                min_qty=cfg.exchange.min_qty,
+                qty_step=cfg.exchange.qty_step,
+                price_step=cfg.exchange.price_step,
+            )
         return LiveBroker(
             base_url=cfg.exchange.base_url,
             api_key=cfg.exchange.api_key,

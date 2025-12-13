@@ -11,6 +11,8 @@ from typing import Any, Mapping
 from algo.strategy.base import Strategy
 from algo.strategy.simple_ma import SimpleMAStrategy
 from algo.strategy.trend_filter import TrendFilteredStrategy
+from algo.strategy.tick_scalper import TickScalper
+
 from shared.config.config_loader import StrategyConfig
 
 _REGISTRY: dict[str, type[Strategy]] = {}
@@ -51,10 +53,10 @@ def build_strategy(cfg: StrategyConfig | Mapping[str, Any] | None) -> Strategy:
         return SimpleMAStrategy()
 
     if isinstance(cfg, StrategyConfig):
-        name = str(cfg.type or "simple_ma")
+        name = str(cfg.type)
         params = cfg.params or {}
     elif isinstance(cfg, Mapping):
-        name = str(cfg.get("type") or "simple_ma")
+        name = str(cfg.get("type"))
         params = dict(cfg)
         params.pop("type", None)
     else:
@@ -62,7 +64,7 @@ def build_strategy(cfg: StrategyConfig | Mapping[str, Any] | None) -> Strategy:
 
     cls = get_strategy_cls(name)
     kwargs = _filter_init_kwargs(cls, params)
-    strat = cls(**kwargs)  # type: ignore[call-arg]
+    strat = cls(**kwargs)
     # 用于幂等下单等场景：提供稳定的策略标识（来自配置注册名）
     try:
         setattr(strat, "strategy_id", name)
@@ -74,3 +76,4 @@ def build_strategy(cfg: StrategyConfig | Mapping[str, Any] | None) -> Strategy:
 # 默认注册
 register_strategy("simple_ma", SimpleMAStrategy)
 register_strategy("trend_filtered", TrendFilteredStrategy)
+register_strategy("tick_scalper", TickScalper)

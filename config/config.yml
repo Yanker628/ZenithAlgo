@@ -1,5 +1,5 @@
-symbol: "DOGEUSDT"
-timeframe: "15min"
+symbol: "GUNUSDT"
+timeframe: "1m"
 
 mode: "paper" # 可选: "dry-run", "paper", "live-testnet", "live-mainnet"
 equity_base: 1000
@@ -18,17 +18,15 @@ exchange:
   price_step: 0.01 # 价格步进
 
 risk:
-  max_position_pct: 0.3
-  max_daily_loss_pct: 1
+  max_position_pct: 0.8
+  max_daily_loss_pct: 0.2
 
 # === 修改点 1: 策略基础配置 ===
 strategy:
-  type: "trend_filtered" # ★ 必须与你 V2.3 代码中的注册名一致
+  type: "tick_scalper" # ★ 必须与你 V2.3 代码中的注册名一致
   # 默认参数（用于实盘或非 sweep 模式）
-  short_window: 25
-  long_window: 120
-  slope_threshold: 0.05 # ★ V2.3 新参数
-  atr_period: 14 # ★ V2.3 新参数
+  window: 5
+  threshold: 0.0001
   atr_stop_multiplier: 2.0 # ★ V2.3 止损倍数
 
 backtest:

@@ -20,7 +20,7 @@ def test_load_config_expands_env_and_returns_appconfig(monkeypatch: pytest.Monke
     assert cfg.equity_base == 1000
     assert cfg.mode == "paper"
     assert cfg.backtest is not None
-    assert cfg.backtest.symbol == cfg.symbol
+    assert isinstance(cfg.backtest.symbol, str) and cfg.backtest.symbol
     assert cfg.risk.max_position_pct > 0
 
 

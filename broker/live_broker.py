@@ -489,7 +489,7 @@ class LiveBroker(Broker):
         if signal.side == "buy":
             new_qty = pos.qty + signal.qty
             if price is not None and new_qty > 0:
-                pos.avg_price = round((pos.avg_price * pos.qty + price * signal.qty) / new_qty, 2)
+                pos.avg_price = (pos.avg_price * pos.qty + price * signal.qty) / new_qty
             pos.qty = new_qty
         elif signal.side == "sell":
             close_qty = min(pos.qty, signal.qty)

@@ -6,13 +6,18 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
+
+import requests
 
 from broker.abstract_broker import Broker, BrokerMode
 from shared.models.models import OrderSignal, Position
 from shared.state.sqlite_ledger import SqliteEventLedger
 from shared.utils.logging import setup_logger
 from shared.utils.trade_logger import TradeLogger, TradeRecord
+
+SymbolRule = dict[str, float]
 
 
 class PaperBroker(Broker):
@@ -24,6 +29,12 @@ class PaperBroker(Broker):
         mode: BrokerMode = BrokerMode.PAPER,
         trade_logger: TradeLogger | None = None,
         ledger_path: str | None = None,
+        base_url: str | None = None,
+        symbols_allowlist: list[str] | None = None,
+        min_notional: float | None = None,
+        min_qty: float | None = None,
+        qty_step: float | None = None,
+        price_step: float | None = None,
     ):
         self.mode = mode
         self.logger = setup_logger("paper-broker")
@@ -32,14 +43,72 @@ class PaperBroker(Broker):
         self.realized_pnl_all = 0.0
         self.realized_pnl_today = 0.0
         self.unrealized_pnl = 0.0
+        self.base_url = base_url
+        self.symbols_allowlist = symbols_allowlist or []
+        self.min_notional = min_notional
+        self.min_qty = min_qty
+        self.qty_step = qty_step
+        self.price_step = price_step
+        self.symbol_rules: dict[str, SymbolRule] = {}
         self._seen_client_order_ids: set[str] = set()
         self._ledger = SqliteEventLedger(ledger_path) if ledger_path else None
         if self._ledger:
             self._seen_client_order_ids = self._ledger.load_all_client_order_ids()
             self._restore_from_ledger()
 
+        self._maybe_load_symbol_rules()
+
     def get_position(self, symbol: str) -> Position | None:
         return self.positions.get(symbol)
+
+    def _maybe_load_symbol_rules(self) -> None:
+        if not self.base_url or not self.symbols_allowlist:
+            return
+        try:
+            symbols_param = "[" + ",".join(f'"{s}"' for s in self.symbols_allowlist) + "]"
+            res = requests.get(f"{self.base_url}/api/v3/exchangeInfo", params={"symbols": symbols_param}, timeout=5)
+            res.raise_for_status()
+            data = res.json()
+            rules = {}
+            for symbol_info in data.get("symbols", []):
+                sym = symbol_info.get("symbol")
+                filters = symbol_info.get("filters", [])
+                rule: dict[str, float] = {}
+                for f in filters:
+                    ftype = f.get("filterType")
+                    if ftype == "LOT_SIZE":
+                        rule["minQty"] = float(f.get("minQty"))
+                        rule["stepSize"] = float(f.get("stepSize"))
+                    elif ftype == "NOTIONAL":
+                        rule["minNotional"] = float(f.get("minNotional"))
+                    elif ftype == "PRICE_FILTER":
+                        rule["tickSize"] = float(f.get("tickSize"))
+                if sym:
+                    rules[sym] = rule
+            self.symbol_rules = rules
+            self.logger.info("Loaded symbol rules for %s", list(rules.keys()))
+        except Exception as exc:
+            self.logger.warning("Failed to load symbol rules (paper): %s", exc)
+
+    def _validate_and_clip_qty(self, symbol: str, qty: float, *, price: float) -> float:
+        if qty <= 0:
+            raise ValueError("quantity must be positive")
+
+        rule = self.symbol_rules.get(symbol, {})
+        qty_step = rule.get("stepSize") or self.qty_step
+        min_qty = rule.get("minQty") or self.min_qty
+        min_notional = rule.get("minNotional") or self.min_notional
+
+        adjusted_qty = float(qty)
+        if qty_step:
+            adjusted_qty = math.floor(adjusted_qty / qty_step) * qty_step
+        if adjusted_qty <= 0:
+            raise ValueError("quantity clipped to 0 by stepSize")
+        if min_qty and adjusted_qty < min_qty:
+            raise ValueError(f"quantity {adjusted_qty} < min_qty {min_qty}")
+        if min_notional and adjusted_qty * price < min_notional:
+            raise ValueError(f"notional {adjusted_qty * price} < min_notional {min_notional}")
+        return adjusted_qty
 
     def _restore_from_ledger(self) -> None:
         assert self._ledger is not None
@@ -98,14 +167,21 @@ class PaperBroker(Broker):
         fill_price_raw = price if price is not None else signal_price
         if fill_price_raw is None:
             return {"status": "error", "error": "missing price"}
-        fill_price = round(float(fill_price_raw), 2)
+        # 纸面/干跑：保持行情精度，不要强行 round(2)。
+        # 否则像 DOGE(0.13xx) 这类低价品种会被“吃掉波动”，PnL/avg_price 全失真。
+        fill_price = float(fill_price_raw)
+
+        try:
+            exec_qty = self._validate_and_clip_qty(signal.symbol, float(signal.qty), price=float(fill_price))
+        except ValueError as exc:
+            return {"status": "blocked", "reason": str(exc)}
 
         self.logger.info(
             "[%s ORDER] %s %s qty=%s reason=%s",
             self.mode.value,
             signal.side.upper(),
             signal.symbol,
-            signal.qty,
+            exec_qty,
             signal.reason,
         )
 
@@ -113,12 +189,12 @@ class PaperBroker(Broker):
         realized_delta = 0.0
 
         if signal.side == "buy":
-            new_qty = pos.qty + signal.qty
+            new_qty = pos.qty + exec_qty
             if new_qty > 0:
-                pos.avg_price = (pos.avg_price * pos.qty + fill_price * signal.qty) / new_qty
+                pos.avg_price = (pos.avg_price * pos.qty + fill_price * exec_qty) / new_qty
             pos.qty = new_qty
         elif signal.side == "sell":
-            close_qty = min(pos.qty, signal.qty)
+            close_qty = min(pos.qty, exec_qty)
             if close_qty <= 0 or pos.qty <= 0:
                 return {"status": "blocked", "reason": "no_position"}
             realized_delta = (fill_price - pos.avg_price) * close_qty
@@ -142,7 +218,7 @@ class PaperBroker(Broker):
                     ts=datetime.now(timezone.utc),
                     symbol=signal.symbol,
                     side=signal.side,
-                    qty=signal.qty,
+                    qty=exec_qty,
                     price=fill_price,
                     mode=self.mode.value,
                     realized_pnl_after_trade=self.realized_pnl_today,
@@ -156,18 +232,18 @@ class PaperBroker(Broker):
             self._ledger.append_fill(
                 client_order_id=cid,
                 symbol=signal.symbol,
-                qty=float(signal.qty),
+                qty=float(exec_qty),
                 price=float(fill_price),
                 fee=0.0,
                 ts=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                raw={"fill_price": fill_price, "realized_delta": realized_delta},
+                raw={"fill_price": fill_price, "realized_delta": realized_delta, "qty_requested": float(signal.qty)},
             )
 
         return {
             "status": "filled",
             "symbol": signal.symbol,
             "side": signal.side,
-            "qty": signal.qty,
+            "qty": exec_qty,
             "price": fill_price,
             "position_qty": pos.qty,
             "avg_price": pos.avg_price,
@@ -178,5 +254,10 @@ class PaperBroker(Broker):
 class DryRunBroker(PaperBroker):
     """干跑 broker：等价 paper，但默认 mode=DRY_RUN。"""
 
-    def __init__(self, trade_logger: TradeLogger | None = None, ledger_path: str | None = None):
-        super().__init__(mode=BrokerMode.DRY_RUN, trade_logger=trade_logger, ledger_path=ledger_path)
+    def __init__(
+        self,
+        trade_logger: TradeLogger | None = None,
+        ledger_path: str | None = None,
+        **kwargs,
+    ):
+        super().__init__(mode=BrokerMode.DRY_RUN, trade_logger=trade_logger, ledger_path=ledger_path, **kwargs)
