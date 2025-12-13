@@ -19,6 +19,7 @@ from engine.signal_pipeline import prepare_signals
 from algo.strategy.registry import build_strategy
 from shared.config.config_loader import load_config
 from shared.utils.logging import setup_logger
+from shared.utils.formatting import fmt_price
 from utils.pnl import compute_unrealized_pnl
 from utils.sizer import resolve_sizing_cfg
 from shared.utils.trade_logger import TradeLogger
@@ -259,9 +260,9 @@ class TradingEngine(BaseEngine):
         if should_log:
             # 保持 runner 时期的日志格式，便于对比
             logger.info(
-                "Tick %s %.2f | PnL(realized_today=%.2f, unrealized=%.2f, total=%.2f, %+.4f%%)",
+                "Tick %s %s | PnL(realized_today=%.2f, unrealized=%.2f, total=%.2f, %+.4f%%)",
                 symbol,
-                price,
+                fmt_price(price),
                 broker.realized_pnl_today,
                 unrealized_pnl,
                 total_pnl,

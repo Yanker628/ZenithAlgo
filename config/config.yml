@@ -1,5 +1,5 @@
-symbol: "BTCUSDT"
-timeframe: "1h"
+symbol: "DOGEUSDT"
+timeframe: "15min"
 
 mode: "paper" # 可选: "dry-run", "paper", "live-testnet", "live-mainnet"
 equity_base: 1000
@@ -33,7 +33,7 @@ strategy:
 
 backtest:
   data_dir: "dataset/history"
-  symbol: "BTCUSDT"
+  symbol: "DOGEUSDT"
   interval: "1h"
   # 为了 Walk-Forward 验证效果，建议覆盖完整周期（牛-熊-震荡）
   start: "2021-01-01T00:00:00Z"

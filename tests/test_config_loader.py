@@ -15,12 +15,12 @@ def test_load_config_expands_env_and_returns_appconfig(monkeypatch: pytest.Monke
 
     cfg = load_config(str(cfg_path), load_env=False)
     assert isinstance(cfg, AppConfig)
-    assert cfg.symbol == "BTCUSDT"
+    assert isinstance(cfg.symbol, str) and cfg.symbol
     assert cfg.exchange.api_key == "dummy_key"
     assert cfg.equity_base == 1000
     assert cfg.mode == "paper"
     assert cfg.backtest is not None
-    assert cfg.backtest.symbol == "BTCUSDT"
+    assert cfg.backtest.symbol == cfg.symbol
     assert cfg.risk.max_position_pct > 0
 
 
