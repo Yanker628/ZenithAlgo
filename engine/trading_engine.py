@@ -84,10 +84,17 @@ class TradingEngine(BaseEngine):
             "live-mainnet": BrokerMode.LIVE_MAINNET,
         }
         mode = mode_map.get(mode_str, BrokerMode.DRY_RUN)
+        ledger_cfg = getattr(cfg, "ledger", None)
+        ledger_enabled = True
+        ledger_path = "dataset/state/ledger.sqlite3"
+        if isinstance(ledger_cfg, dict):
+            ledger_enabled = bool(ledger_cfg.get("enabled", True))
+            ledger_path = str(ledger_cfg.get("path") or ledger_path)
+        ledger_path = ledger_path if ledger_enabled else None
         if mode == BrokerMode.DRY_RUN:
-            return DryRunBroker(trade_logger)
+            return DryRunBroker(trade_logger, ledger_path=ledger_path)
         if mode == BrokerMode.PAPER:
-            return PaperBroker(mode=BrokerMode.PAPER, trade_logger=trade_logger)
+            return PaperBroker(mode=BrokerMode.PAPER, trade_logger=trade_logger, ledger_path=ledger_path)
         return LiveBroker(
             base_url=cfg.exchange.base_url,
             api_key=cfg.exchange.api_key,
@@ -101,6 +108,7 @@ class TradingEngine(BaseEngine):
             price_step=cfg.exchange.price_step,
             max_price_deviation_pct=getattr(cfg.exchange, "max_price_deviation_pct", None),
             trade_logger=trade_logger,
+            ledger_path=ledger_path,
         )
 
     @staticmethod

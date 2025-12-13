@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from broker.abstract_broker import Broker, BrokerMode
 from shared.models.models import OrderSignal, Position
+from shared.state.sqlite_ledger import SqliteEventLedger
 from shared.utils.logging import setup_logger
 from shared.utils.trade_logger import TradeLogger, TradeRecord
 
@@ -17,7 +18,13 @@ from shared.utils.trade_logger import TradeLogger, TradeRecord
 class PaperBroker(Broker):
     """纸面交易 broker：按给定 price 更新本地持仓。"""
 
-    def __init__(self, *, mode: BrokerMode = BrokerMode.PAPER, trade_logger: TradeLogger | None = None):
+    def __init__(
+        self,
+        *,
+        mode: BrokerMode = BrokerMode.PAPER,
+        trade_logger: TradeLogger | None = None,
+        ledger_path: str | None = None,
+    ):
         self.mode = mode
         self.logger = setup_logger("paper-broker")
         self.positions: dict[str, Position] = {}
@@ -26,15 +33,65 @@ class PaperBroker(Broker):
         self.realized_pnl_today = 0.0
         self.unrealized_pnl = 0.0
         self._seen_client_order_ids: set[str] = set()
+        self._ledger = SqliteEventLedger(ledger_path) if ledger_path else None
+        if self._ledger:
+            self._seen_client_order_ids = self._ledger.load_all_client_order_ids()
+            self._restore_from_ledger()
 
     def get_position(self, symbol: str) -> Position | None:
         return self.positions.get(symbol)
+
+    def _restore_from_ledger(self) -> None:
+        assert self._ledger is not None
+        for row in self._ledger.iter_fills_with_order_side():
+            side = str(row.get("side") or "")
+            symbol = str(row.get("symbol") or "")
+            qty = float(row.get("qty") or 0.0)
+            price = float(row.get("price") or 0.0)
+            fee = float(row.get("fee") or 0.0) if row.get("fee") is not None else 0.0
+            if not symbol or qty <= 0 or price <= 0 or side not in {"buy", "sell"}:
+                continue
+
+            pos = self.positions.get(symbol) or Position(symbol, 0.0, 0.0)
+            realized_delta = 0.0
+            if side == "buy":
+                new_qty = pos.qty + qty
+                if new_qty > 0:
+                    pos.avg_price = (pos.avg_price * pos.qty + price * qty + fee) / new_qty
+                pos.qty = new_qty
+            else:
+                close_qty = min(pos.qty, qty)
+                if close_qty > 0 and pos.qty > 0:
+                    realized_delta = (price - pos.avg_price) * close_qty - fee
+                pos.qty -= close_qty
+                if pos.qty <= 0:
+                    pos.avg_price = 0.0
+
+            if pos.qty <= 0:
+                self.positions.pop(symbol, None)
+            else:
+                self.positions[symbol] = pos
+            self.realized_pnl_all += realized_delta
+
+        self.realized_pnl_today = self.realized_pnl_all
 
     def execute(self, signal: OrderSignal, price: float | None = None, **kwargs) -> dict:
         cid = getattr(signal, "client_order_id", None)
         if cid:
             if cid in self._seen_client_order_ids:
                 return {"status": "duplicate", "client_order_id": cid}
+            if self._ledger:
+                ok = self._ledger.insert_order_new(
+                    client_order_id=cid,
+                    symbol=signal.symbol,
+                    side=signal.side,
+                    qty=signal.qty,
+                    price=getattr(signal, "price", None),
+                    raw_signal=signal,
+                )
+                if not ok:
+                    self._seen_client_order_ids.add(cid)
+                    return {"status": "duplicate", "client_order_id": cid}
             self._seen_client_order_ids.add(cid)
 
         signal_price = getattr(signal, "price", None)
@@ -94,6 +151,18 @@ class PaperBroker(Broker):
                 )
             )
 
+        if cid and self._ledger:
+            self._ledger.set_order_status(cid, "FILLED" if pos.qty >= 0 else "FILLED")
+            self._ledger.append_fill(
+                client_order_id=cid,
+                symbol=signal.symbol,
+                qty=float(signal.qty),
+                price=float(fill_price),
+                fee=0.0,
+                ts=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                raw={"fill_price": fill_price, "realized_delta": realized_delta},
+            )
+
         return {
             "status": "filled",
             "symbol": signal.symbol,
@@ -109,5 +178,5 @@ class PaperBroker(Broker):
 class DryRunBroker(PaperBroker):
     """干跑 broker：等价 paper，但默认 mode=DRY_RUN。"""
 
-    def __init__(self, trade_logger: TradeLogger | None = None):
-        super().__init__(mode=BrokerMode.DRY_RUN, trade_logger=trade_logger)
+    def __init__(self, trade_logger: TradeLogger | None = None, ledger_path: str | None = None):
+        super().__init__(mode=BrokerMode.DRY_RUN, trade_logger=trade_logger, ledger_path=ledger_path)

@@ -79,6 +79,7 @@ def validate_raw_config(cfg: dict[str, Any]) -> None:
         "timeframe",
         "mode",
         "equity_base",
+        "ledger",
         "exchange",
         "risk",
         "strategy",
@@ -112,6 +113,11 @@ def validate_raw_config(cfg: dict[str, Any]) -> None:
     sizing = cfg.get("sizing")
     if sizing is not None and not isinstance(sizing, dict):
         raise ValueError("config.sizing must be a dict")
+
+    ledger = cfg.get("ledger")
+    if ledger is not None:
+        ledger = _expect_dict(ledger, ctx="config.ledger")
+        _validate_ledger(ledger)
 
 
 def _validate_exchange(exchange: dict[str, Any]) -> None:
@@ -217,6 +223,15 @@ def _validate_backtest(bt: dict[str, Any]) -> None:
             raise ValueError("config.backtest.factors must be a list")
 
 
+def _validate_ledger(ledger: dict[str, Any]) -> None:
+    allowed = {"enabled", "path"}
+    _ensure_allowed_keys(ledger, allowed=allowed, ctx="config.ledger")
+    if "enabled" in ledger and ledger["enabled"] is not None:
+        _expect_bool(ledger["enabled"], ctx="config.ledger.enabled")
+    if "path" in ledger and ledger["path"] is not None:
+        _expect_str(ledger["path"], ctx="config.ledger.path")
+
+
 def _validate_fees(fees: dict[str, Any]) -> None:
     allowed = {"maker", "taker", "slippage_bp"}
     _ensure_allowed_keys(fees, allowed=allowed, ctx="config.backtest.fees")
@@ -256,4 +271,3 @@ def _validate_sweep(sweep: dict[str, Any]) -> None:
     if "filters" in sweep and sweep["filters"] is not None:
         if not isinstance(sweep["filters"], dict):
             raise ValueError("config.backtest.sweep.filters must be a dict")
-

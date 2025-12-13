@@ -11,6 +11,7 @@ from broker.abstract_broker import Broker
 from broker.execution.simulator import BacktestFillSimulator
 from broker.execution.slippage_models import BpsSlippageModel
 from shared.models.models import OrderSignal, Position
+from shared.state.sqlite_ledger import SqliteEventLedger
 
 
 class BacktestBroker(Broker):
@@ -22,6 +23,7 @@ class BacktestBroker(Broker):
         maker_fee: float = 0.0,
         taker_fee: float = 0.0004,
         slippage_bp: float = 0.0,
+        ledger_path: str | None = None,
     ):
         self.initial_equity = float(initial_equity)
         self.maker_fee = float(maker_fee)
@@ -37,6 +39,9 @@ class BacktestBroker(Broker):
         self.last_prices: dict[str, float] = {}
         self.trades: list[dict] = []
         self._seen_client_order_ids: set[str] = set()
+        self._ledger = SqliteEventLedger(ledger_path) if ledger_path else None
+        if self._ledger:
+            self._seen_client_order_ids = self._ledger.load_all_client_order_ids()
 
         self._sim = BacktestFillSimulator(
             fee_rate=self.taker_fee,  # 简化：回测统一按吃单计费
@@ -58,6 +63,18 @@ class BacktestBroker(Broker):
         if cid:
             if cid in self._seen_client_order_ids:
                 return {"status": "duplicate", "client_order_id": cid}
+            if self._ledger:
+                ok = self._ledger.insert_order_new(
+                    client_order_id=cid,
+                    symbol=signal.symbol,
+                    side=signal.side,
+                    qty=signal.qty,
+                    price=getattr(signal, "price", None),
+                    raw_signal=signal,
+                )
+                if not ok:
+                    self._seen_client_order_ids.add(cid)
+                    return {"status": "duplicate", "client_order_id": cid}
             self._seen_client_order_ids.add(cid)
 
         raw_price = tick_price
@@ -75,6 +92,8 @@ class BacktestBroker(Broker):
             payload: dict = {"status": fill.status}
             if fill.reason:
                 payload["reason"] = fill.reason
+            if cid and self._ledger:
+                self._ledger.set_order_status(cid, fill.status.upper())
             return payload
 
         self.cash = fill.cash
@@ -108,6 +127,17 @@ class BacktestBroker(Broker):
                 "realized_delta": fill.realized_delta,
             }
         )
+        if cid and self._ledger:
+            self._ledger.set_order_status(cid, "FILLED")
+            self._ledger.append_fill(
+                client_order_id=cid,
+                symbol=signal.symbol,
+                qty=float(fill.exec_qty),
+                price=float(fill.exec_price),
+                fee=float(fill.fee_paid),
+                ts=(ts.isoformat() if ts else None),
+                raw={"raw_price": float(raw_price), "exec_price": float(fill.exec_price)},
+            )
 
         return {
             "status": "filled",

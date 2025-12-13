@@ -18,6 +18,7 @@ import requests
 
 from broker.abstract_broker import Broker, BrokerMode
 from shared.models.models import OrderSignal, Position
+from shared.state.sqlite_ledger import SqliteEventLedger
 from shared.utils.logging import setup_logger
 from shared.utils.trade_logger import TradeLogger, TradeRecord
 
@@ -42,6 +43,7 @@ class LiveBroker(Broker):
         price_step: float | None = None,
         trade_logger: TradeLogger | None = None,
         max_price_deviation_pct: float | None = None,
+        ledger_path: str | None = None,
     ):
         self.base_url = base_url
         self.api_key = api_key
@@ -63,6 +65,9 @@ class LiveBroker(Broker):
         self.unrealized_pnl = 0.0
         self.symbol_rules: dict[str, SymbolRule] = {}
         self._seen_client_order_ids: set[str] = set()
+        self._ledger = SqliteEventLedger(ledger_path) if ledger_path else None
+        if self._ledger:
+            self._seen_client_order_ids = self._ledger.load_all_client_order_ids()
 
         if self.allow_live and self.symbols_allowlist:
             self._load_symbol_rules()
@@ -77,6 +82,18 @@ class LiveBroker(Broker):
         if cid:
             if cid in self._seen_client_order_ids:
                 return {"status": "duplicate", "client_order_id": cid}
+            if self._ledger:
+                ok = self._ledger.insert_order_new(
+                    client_order_id=cid,
+                    symbol=signal.symbol,
+                    side=signal.side,
+                    qty=signal.qty,
+                    price=getattr(signal, "price", None),
+                    raw_signal=signal,
+                )
+                if not ok:
+                    self._seen_client_order_ids.add(cid)
+                    return {"status": "duplicate", "client_order_id": cid}
             self._seen_client_order_ids.add(cid)
 
         if self.symbols_allowlist and signal.symbol not in self.symbols_allowlist:
@@ -114,9 +131,13 @@ class LiveBroker(Broker):
             res["price_used"] = price
             if cid:
                 res["client_order_id"] = cid
+                if self._ledger:
+                    self._ledger.set_order_status(cid, "SUBMITTED")
             return res
         except Exception as exc:
             self.logger.error("Order failed: %s", exc)
+            if cid and self._ledger:
+                self._ledger.set_order_status(cid, "ERROR")
             return {"status": "error", "error": str(exc)}
 
     def sync_positions(self) -> None:
