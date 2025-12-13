@@ -13,7 +13,7 @@ from broker.live_broker import LiveBroker
 from broker.paper_broker import DryRunBroker, PaperBroker
 from engine.base_engine import BaseEngine, EngineResult
 from engine.sources.market_event_source import MarketEventSource
-from data.client import BinanceMarketClient, FakeMarketClient
+from market_data.client import BinanceMarketClient, FakeMarketClient
 from algo.risk.manager import RiskManager
 from engine.signal_pipeline import prepare_signals
 from algo.strategy.registry import build_strategy

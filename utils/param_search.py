@@ -95,7 +95,7 @@ def _prepare_output_path(backtest_cfg: dict, output_csv: str | None, prefix: str
     symbol = backtest_cfg.get("symbol", "UNKNOWN")
     interval = backtest_cfg.get("interval", "NA")
     filename = f"{prefix}_{symbol}_{interval}.csv"
-    return Path("dataset/research") / filename
+    return Path("results") / "research" / filename
 
 
 def _run_single_combo(
@@ -144,7 +144,7 @@ def grid_search(
     objective_weights:
         评分权重（可用 w_ret/w_sharpe/w_dd 或 total_return/sharpe/max_drawdown）。
     output_csv:
-        输出 CSV 路径；None 时写入默认 `data/research/`。
+        输出 CSV 路径；None 时写入默认 `results/research/`。
     cfg_obj:
         已加载配置对象。
     filters:

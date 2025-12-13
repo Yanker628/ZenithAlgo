@@ -4,7 +4,9 @@
 
 - 根目录：`README.md` 给出全貌，`Makefile` 封装日常命令，`CONTRIBUTING.md` 说明贡献流程，`LICENSE` 载明协议。保持根目录扁平，避免巨石文件。
 - 文档库：`documents/` 汇总流程、架构与实践（如 `代码组织.md`、`通用项目架构模板.md`、`开发经验.md`），是理解方法论与协作规则的首选入口。新增流程文档时优先放此处并在 README 链接。
-- 提示词资产：`prompts/` 按角色拆分（system / assistant / coding / user），`prompts/prompts-library/` 提供 Excel ↔ Markdown 互转工具与脚本目录，便于批量维护提示词，适合作为“单一真实来源”。
+- 提示词资产：`prompts/` 按角色拆分（system / assistant / coding / user），
+  `prompts/prompts-library/` 提供 Excel ↔ Markdown 互转工具与脚本目录，便于批量维护提示词，
+  适合作为“单一真实来源”。
 - 代码与集成：`libs/` 预留核心实现骨架，`common/`、`database/`、`external/` 分别对应通用模型、存储适配与外部依赖登记；新增模块需保持分层边界与单一职责，避免跨层调用。
 - 备份：`backups/` 内含 `一键备份.sh` 与 `快速备份.py`，用于本地快照或同步，请先在隔离目录试跑，确认输出路径与权限。
 

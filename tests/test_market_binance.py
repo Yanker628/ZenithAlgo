@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from data.client import BinanceMarketClient
+from market_data.client import BinanceMarketClient
 
 
 @pytest.mark.live

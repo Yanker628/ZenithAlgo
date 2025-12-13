@@ -1,5 +1,7 @@
 # ZenithAlgo Roadmap（开发中）
 
+> 最后核对：2025-12-13（以仓库代码现状为准；路线图用于对齐方向，不作为“承诺交付”）
+
 ## 0. 总原则（不变）
 
 - 单交易所、事件驱动、现货语义（不做空；`sell` 仅平仓）。
@@ -15,9 +17,11 @@
 - `engine/backtest_engine.py`：单次回测（`BacktestEngine`）。
 - `engine/signal_pipeline.py`：策略→sizing→风控→执行的共享管线，减少 backtest/live 漂移。
 
-### 1.2 行情命名与包冲突规避
+### 1.2 事件推进/事件源抽象（已落地）
 
-- `market/` 已更名为 `market_data/`（避免未来与数据目录 `data/` 混淆）。
+- `engine/base_engine.py`：统一 `run_loop(...)`（回测/实盘复用同一事件循环）。
+- `engine/sources/event_source.py`：`EventSource` + `PandasFrameEventSource`（回测数据源）。
+- `engine/sources/market_event_source.py`：`MarketEventSource`（实时行情源；含重试/退避）。
 
 ### 1.3 协作与工程化（开发阶段）
 
@@ -37,21 +41,29 @@
 - 统一产物目录至 `results/`，不再使用 `data/experiments`。
 - 目录结构规范化：`results/{task}/{symbol}/{interval}/{range}/{run_id}/`。
 - `equity.csv` 新增 `drawdown` 和 `drawdown_pct` 字段。
-- 初步引入 `research/schemas.py` 用于定义产物元数据结构。
+- `research/experiment.py`：统一落盘 `meta.json/summary.json/results.json/report.md/summary.md` 等产物。
+- 初步引入 `research/schemas.py` 用于定义结果/元信息结构（目前尚未在 engine 全面“强类型化”使用）。
+
+### 1.6 数据模块命名收敛 (M5 Done)
+
+- 官方命名统一为 `market_data/`（行情 client + 历史 loader）。
+- 开发阶段不保留 `data/` 兼容层（避免歧义与入口分裂）。
+- 文档路径已同步到 `market_data/`；模型导入推荐使用 `market_data/models.py` 作为稳定入口。
 
 ## 2. 近期里程碑（按优先级）
 
-### M3（中优先级）：事件循环抽象（可选）
+### M3：事件循环抽象（已完成）
 
-目标：把 backtest/live 的“事件推进”抽到 `engine/event_loop.py`，但避免过度设计。
+目标已通过 `engine/base_engine.py` + `engine/sources/*` 达成（不强制单独拆 `engine/event_loop.py`）。
 
-- 先做最小版：同步迭代器 + hook（无需完整 pub/sub）
-- 仅当 backtest/live 出现明显逻辑漂移时再推进
+- 同步迭代器 + 生命周期 hook（无需完整 pub/sub）
+- backtest/live 共用同一 `run_loop`，事件源差异集中在 `EventSource`
 
-### M4: 更丰富的数据/产物 Schema 校验（中优先级）
+### M4：更丰富的数据/产物 Schema 校验（中优先级）
 
-- 完善 `research/schemas.py`，覆盖更多配置和结果字段。
-- 在 `backtest_engine` 和 `experiment` 中全面使用 dataclass/Pydantic 对象而非裸 dict。
+- 完善 `research/schemas.py`：覆盖更多配置快照、metrics、diagnostics、policy、artifacts 字段。
+- 从“弱约束 dict”逐步迁移到 dataclass（不强依赖 Pydantic）：先在 `research/experiment.py` 统一输出结构，再逐步收敛 engine 返回值。
+- 为 schema/约束补齐最小测试：给 `summary.json`/`meta.json` 关键字段做离线校验（防止接口漂移）。
 
 ## 3. 暂缓（明确不做/后做）
 
@@ -60,7 +72,7 @@
 - `portfolio/`：多资产配置/再平衡（目前单品种现货不需要）
 - `signals/`：多策略/多因子信号组合（当前 `signal_pipeline` 足够）
 - `interfaces/api/web`：等研究链路稳定后再上
-- 多数据源 adapters：先把现有 `utils/data_loader.py` 打磨好再扩展
+- 多数据源 adapters：先把现有 `market_data/loader.py` 打磨好再扩展
 
 ## 4. 开发规范（简版）
 

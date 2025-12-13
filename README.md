@@ -27,7 +27,7 @@ ZenithAlgo 是一个基于 Python 的事件驱动量化交易系统，专为加�
 
 ## 🏗️ 系统架构
 
-```
+```text
 ZenithAlgo/
 ├── documents/           # 文档库（架构/流程/实践）
 ├── engine/              # 交易引擎
@@ -63,6 +63,7 @@ ZenithAlgo/
 │   └── accounts/             # 账户模型（预留）
 ├── market_data/         # 行情数据
 │   ├── client.py        # 行情客户端（实时/模拟）
+│   ├── loader.py        # 历史数据加载/下载（CSV + REST）
 │   └── models.py        # 数据模型
 ├── prompts/             # 提示词资产（预留）
 ├── libs/                # 核心实现骨架（预留）
@@ -103,14 +104,14 @@ git clone <your-repo-url>
 cd ZenithAlgo
 ```
 
-2. **创建虚拟环境**
+1. **创建虚拟环境**
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 ```
 
-3. **安装依赖**
+1. **安装依赖**
 
 ```bash
 pip install -e .
@@ -118,7 +119,7 @@ pip install -e .
 uv pip install -e .
 ```
 
-4. **配置环境变量**
+1. **配置环境变量**
 
 ```bash
 # 创建 .env 文件（可选，程序会自动加载）
@@ -126,7 +127,7 @@ export BINANCE_API_KEY="your_api_key"
 export BINANCE_API_SECRET="your_api_secret"
 ```
 
-5. **配置系统**
+1. **配置系统**
 
 ```bash
 # 复制示例配置
@@ -166,7 +167,8 @@ python3 main.py sweep --config config/config.yml
 python3 main.py walkforward --config config/config.yml
 ```
 
-V2.3 起，`backtest/sweep/walkforward` 会把实验产物统一落盘到 `data/experiments/`（含 `results.json`、`report.md`、配置快照，以及回测的 `trades.csv/equity.csv` 等）。
+V2.3 起，`backtest/sweep/walkforward` 会把实验产物统一落盘到 `results/`
+（含 `results.json`、`report.md`、配置快照，以及回测的 `trades.csv/equity.csv` 等）。
 
 2.4-0 起，实验目录还会包含：
 
@@ -326,21 +328,21 @@ class MyStrategy(Strategy):
 
 - 修改 `config.yml` 中的 `backtest` 配置
 - 运行 `python main.py backtest --config config/config.yml`
-- 结果输出到控制台和 `data/trades/` 目录
+- 结果输出到控制台，并落盘到 `results/backtest/.../` 目录
 - 回测中若现金不足会自动缩量成交，日志/指标记录的是“真实成交量”。
 
 **参数搜索**
 
 - 在 `backtest.sweep` 中配置参数网格
 - 运行 `python main.py sweep --config config/config.yml`
-- 结果保存到 `data/research/ma_sweep_*.csv`
+- 结果保存到 `results/sweep/.../<symbol>/sweep.csv`
 
 **最优参数生成**
 
 ```bash
 python -m utils.best_params \
   --cfg config/config.yml \
-  --sweep data/research/ma_sweep_BTCUSDT_1h.csv \
+  --sweep results/sweep/.../BTCUSDT/sweep.csv \
   --min_trades 30 \
   --out config/config_best_BTCUSDT_1h.yml
 ```
@@ -416,8 +418,8 @@ LIVE_TESTS=1 pytest -m live
 项目采用模块化设计，各模块职责清晰：
 
 - **engine/**：交易引擎，负责事件循环和流程控制
-- **strategy/**：策略模块，实现交易逻辑
-- **risk/**：风险管理，过滤和限制交易信号
+- **algo/strategy/**：策略模块，实现交易逻辑
+- **algo/risk/**：风险管理，过滤和限制交易信号
 - **broker/**：交易接口，封装交易所 API
 - **market_data/**：行情数据，提供实时和历史数据
 - **utils/**：工具函数，配置、日志、指标计算等

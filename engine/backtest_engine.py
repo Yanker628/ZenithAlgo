@@ -21,7 +21,7 @@ from algo.factors.registry import apply_factors, build_factors
 from algo.risk.manager import RiskManager
 from algo.strategy.registry import build_strategy
 from shared.config.config_loader import load_config, StrategyConfig
-from data.loader import HistoricalDataLoader
+from market_data.loader import HistoricalDataLoader
 from shared.utils.logging import setup_logger
 from utils.pnl import compute_unrealized_pnl
 from utils.sizer import resolve_sizing_cfg

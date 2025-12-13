@@ -4,4 +4,3 @@
 
 - `architecture.md`：当前实现的架构与分层
 - `backtest_logic.md`：回测数据流与口径说明
-
