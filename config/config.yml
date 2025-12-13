@@ -49,7 +49,7 @@ backtest:
 
   sizing:
     position_pct: 0.2
-    trade_notional: 200
+    trade_notional: 300
 
   # 回测时的策略覆盖配置
   strategy:

@@ -107,9 +107,7 @@ class TradingEngine(BaseEngine):
             recovery_enabled = bool(recovery_cfg.get("enabled", True))
             recovery_mode = str(recovery_cfg.get("mode") or recovery_mode).strip().lower()
         if mode == BrokerMode.DRY_RUN:
-            symbols_for_rules = list(cfg.exchange.symbols_allowlist or [])
-            if cfg.symbol not in symbols_for_rules:
-                symbols_for_rules.append(cfg.symbol)
+            symbols_for_rules = [cfg.symbol]
             return DryRunBroker(
                 trade_logger,
                 ledger_path=ledger_path,
@@ -121,9 +119,7 @@ class TradingEngine(BaseEngine):
                 price_step=cfg.exchange.price_step,
             )
         if mode == BrokerMode.PAPER:
-            symbols_for_rules = list(cfg.exchange.symbols_allowlist or [])
-            if cfg.symbol not in symbols_for_rules:
-                symbols_for_rules.append(cfg.symbol)
+            symbols_for_rules = [cfg.symbol]
             return PaperBroker(
                 mode=BrokerMode.PAPER,
                 trade_logger=trade_logger,

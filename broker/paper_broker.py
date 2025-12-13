@@ -53,11 +53,10 @@ class PaperBroker(Broker):
         self.symbol_rules: dict[str, SymbolRule] = {}
         self._seen_client_order_ids: set[str] = set()
         self._ledger = SqliteEventLedger(ledger_path) if ledger_path else None
+        self._maybe_load_symbol_rules(self.symbols_allowlist)
         if self._ledger:
             self._seen_client_order_ids = self._ledger.load_all_client_order_ids()
             self._restore_from_ledger()
-
-        self._maybe_load_symbol_rules(self.symbols_allowlist)
 
     def get_position(self, symbol: str) -> Position | None:
         return self.positions.get(symbol)
@@ -137,11 +136,12 @@ class PaperBroker(Broker):
             if not symbol or qty <= 0 or price <= 0 or side not in {"buy", "sell"}:
                 continue
 
-            self._ensure_symbol_rule(symbol)
+            # 恢复状态时不要“按需拉交易所规则”，否则会因为历史残留 symbol 导致启动期刷日志/刷请求。
+            # 若该 symbol 已被预加载规则（通常是当前运行的 symbol），则顺便做一次 round 去噪。
             rule = self.symbol_rules.get(symbol, {})
-            qty_step = rule.get("stepSize") or self.qty_step
+            qty_step = rule.get("stepSize") or None
             qty_decimals = decimals_from_step(float(qty_step)) if qty_step else None
-            tick = rule.get("tickSize") or self.price_step
+            tick = rule.get("tickSize") or None
             price_decimals = decimals_from_step(float(tick)) if tick else None
 
             pos = self.positions.get(symbol) or Position(symbol, 0.0, 0.0)
