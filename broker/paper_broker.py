@@ -15,6 +15,7 @@ from broker.abstract_broker import Broker, BrokerMode
 from shared.models.models import OrderSignal, Position
 from shared.state.sqlite_ledger import SqliteEventLedger
 from shared.utils.logging import setup_logger
+from shared.utils.precision import decimals_from_step, floor_to_step
 from shared.utils.trade_logger import TradeLogger, TradeRecord
 
 SymbolRule = dict[str, float]
@@ -56,20 +57,25 @@ class PaperBroker(Broker):
             self._seen_client_order_ids = self._ledger.load_all_client_order_ids()
             self._restore_from_ledger()
 
-        self._maybe_load_symbol_rules()
+        self._maybe_load_symbol_rules(self.symbols_allowlist)
 
     def get_position(self, symbol: str) -> Position | None:
         return self.positions.get(symbol)
 
-    def _maybe_load_symbol_rules(self) -> None:
-        if not self.base_url or not self.symbols_allowlist:
+    def _maybe_load_symbol_rules(self, symbols: list[str]) -> None:
+        if not self.base_url or not symbols:
+            return
+        self._load_symbol_rules(symbols)
+
+    def _load_symbol_rules(self, symbols: list[str]) -> None:
+        if not self.base_url or not symbols:
             return
         try:
-            symbols_param = "[" + ",".join(f'"{s}"' for s in self.symbols_allowlist) + "]"
+            symbols_param = "[" + ",".join(f'"{s}"' for s in symbols) + "]"
             res = requests.get(f"{self.base_url}/api/v3/exchangeInfo", params={"symbols": symbols_param}, timeout=5)
             res.raise_for_status()
             data = res.json()
-            rules = {}
+            loaded: dict[str, SymbolRule] = {}
             for symbol_info in data.get("symbols", []):
                 sym = symbol_info.get("symbol")
                 filters = symbol_info.get("filters", [])
@@ -84,16 +90,25 @@ class PaperBroker(Broker):
                     elif ftype == "PRICE_FILTER":
                         rule["tickSize"] = float(f.get("tickSize"))
                 if sym:
-                    rules[sym] = rule
-            self.symbol_rules = rules
-            self.logger.info("Loaded symbol rules for %s", list(rules.keys()))
+                    loaded[sym] = rule
+            if loaded:
+                self.symbol_rules.update(loaded)
+                self.logger.info("Loaded symbol rules for %s", list(loaded.keys()))
         except Exception as exc:
             self.logger.warning("Failed to load symbol rules (paper): %s", exc)
+
+    def _ensure_symbol_rule(self, symbol: str) -> None:
+        if symbol in self.symbol_rules:
+            return
+        # 纸面模式：允许用户临时切换 symbol，不强依赖 symbols_allowlist 配置。
+        # 若 base_url 可用，则按需补齐该 symbol 的交易规则（stepSize/minQty/tickSize）。
+        self._load_symbol_rules([symbol])
 
     def _validate_and_clip_qty(self, symbol: str, qty: float, *, price: float) -> float:
         if qty <= 0:
             raise ValueError("quantity must be positive")
 
+        self._ensure_symbol_rule(symbol)
         rule = self.symbol_rules.get(symbol, {})
         qty_step = rule.get("stepSize") or self.qty_step
         min_qty = rule.get("minQty") or self.min_qty
@@ -101,7 +116,8 @@ class PaperBroker(Broker):
 
         adjusted_qty = float(qty)
         if qty_step:
-            adjusted_qty = math.floor(adjusted_qty / qty_step) * qty_step
+            adjusted_qty = floor_to_step(adjusted_qty, float(qty_step))
+            adjusted_qty = round(adjusted_qty, decimals_from_step(float(qty_step)))
         if adjusted_qty <= 0:
             raise ValueError("quantity clipped to 0 by stepSize")
         if min_qty and adjusted_qty < min_qty:
@@ -121,6 +137,13 @@ class PaperBroker(Broker):
             if not symbol or qty <= 0 or price <= 0 or side not in {"buy", "sell"}:
                 continue
 
+            self._ensure_symbol_rule(symbol)
+            rule = self.symbol_rules.get(symbol, {})
+            qty_step = rule.get("stepSize") or self.qty_step
+            qty_decimals = decimals_from_step(float(qty_step)) if qty_step else None
+            tick = rule.get("tickSize") or self.price_step
+            price_decimals = decimals_from_step(float(tick)) if tick else None
+
             pos = self.positions.get(symbol) or Position(symbol, 0.0, 0.0)
             realized_delta = 0.0
             if side == "buy":
@@ -135,6 +158,11 @@ class PaperBroker(Broker):
                 pos.qty -= close_qty
                 if pos.qty <= 0:
                     pos.avg_price = 0.0
+
+            if qty_decimals is not None:
+                pos.qty = round(pos.qty, int(qty_decimals))
+            if price_decimals is not None and pos.avg_price:
+                pos.avg_price = round(pos.avg_price, int(price_decimals))
 
             if pos.qty <= 0:
                 self.positions.pop(symbol, None)
@@ -187,6 +215,11 @@ class PaperBroker(Broker):
 
         pos = self.positions.get(signal.symbol) or Position(signal.symbol, 0.0, 0.0)
         realized_delta = 0.0
+        rule = self.symbol_rules.get(signal.symbol, {})
+        qty_step = rule.get("stepSize") or self.qty_step
+        qty_decimals = decimals_from_step(float(qty_step)) if qty_step else None
+        tick = rule.get("tickSize") or self.price_step
+        price_decimals = decimals_from_step(float(tick)) if tick else None
 
         if signal.side == "buy":
             new_qty = pos.qty + exec_qty
@@ -203,6 +236,11 @@ class PaperBroker(Broker):
                 pos.avg_price = 0.0
         else:
             return {"status": "error", "error": f"unsupported side {signal.side}"}
+
+        if qty_decimals is not None:
+            pos.qty = round(pos.qty, int(qty_decimals))
+        if price_decimals is not None and pos.avg_price:
+            pos.avg_price = round(pos.avg_price, int(price_decimals))
 
         if pos.qty <= 0:
             self.positions.pop(signal.symbol, None)

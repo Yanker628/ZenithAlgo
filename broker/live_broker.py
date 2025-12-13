@@ -21,6 +21,7 @@ from broker.abstract_broker import Broker, BrokerMode
 from shared.models.models import OrderSignal, Position
 from shared.state.sqlite_ledger import SqliteEventLedger
 from shared.utils.logging import setup_logger
+from shared.utils.precision import decimals_from_step, floor_to_step
 from shared.utils.trade_logger import TradeLogger, TradeRecord
 
 SymbolRule = dict[str, float]
@@ -434,7 +435,8 @@ class LiveBroker(Broker):
 
         adjusted_qty = float(qty)
         if qty_step:
-            adjusted_qty = math.floor(adjusted_qty / qty_step) * qty_step
+            adjusted_qty = floor_to_step(adjusted_qty, float(qty_step))
+            adjusted_qty = round(adjusted_qty, decimals_from_step(float(qty_step)))
         if min_qty and adjusted_qty < min_qty:
             raise ValueError(f"quantity {adjusted_qty} < min_qty {min_qty}")
         if price is not None and min_notional and adjusted_qty * price < min_notional:
