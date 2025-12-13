@@ -15,7 +15,7 @@ from broker.abstract_broker import Broker, BrokerMode
 from shared.models.models import OrderSignal, Position
 from shared.state.sqlite_ledger import SqliteEventLedger
 from shared.utils.logging import setup_logger
-from shared.utils.precision import decimals_from_step, floor_to_step
+from shared.utils.precision import decimals_from_step, floor_to_step, snap_to_decimals
 from shared.utils.trade_logger import TradeLogger, TradeRecord
 
 SymbolRule = dict[str, float]
@@ -117,7 +117,7 @@ class PaperBroker(Broker):
         adjusted_qty = float(qty)
         if qty_step:
             adjusted_qty = floor_to_step(adjusted_qty, float(qty_step))
-            adjusted_qty = round(adjusted_qty, decimals_from_step(float(qty_step)))
+            adjusted_qty = snap_to_decimals(adjusted_qty, decimals_from_step(float(qty_step)))
         if adjusted_qty <= 0:
             raise ValueError("quantity clipped to 0 by stepSize")
         if min_qty and adjusted_qty < min_qty:
@@ -160,9 +160,9 @@ class PaperBroker(Broker):
                     pos.avg_price = 0.0
 
             if qty_decimals is not None:
-                pos.qty = round(pos.qty, int(qty_decimals))
+                pos.qty = snap_to_decimals(pos.qty, int(qty_decimals))
             if price_decimals is not None and pos.avg_price:
-                pos.avg_price = round(pos.avg_price, int(price_decimals))
+                pos.avg_price = snap_to_decimals(pos.avg_price, int(price_decimals))
 
             if pos.qty <= 0:
                 self.positions.pop(symbol, None)
@@ -220,6 +220,10 @@ class PaperBroker(Broker):
         qty_decimals = decimals_from_step(float(qty_step)) if qty_step else None
         tick = rule.get("tickSize") or self.price_step
         price_decimals = decimals_from_step(float(tick)) if tick else None
+        if qty_decimals is not None:
+            exec_qty = snap_to_decimals(exec_qty, int(qty_decimals))
+        if price_decimals is not None:
+            fill_price = snap_to_decimals(fill_price, int(price_decimals))
 
         if signal.side == "buy":
             new_qty = pos.qty + exec_qty
@@ -238,9 +242,9 @@ class PaperBroker(Broker):
             return {"status": "error", "error": f"unsupported side {signal.side}"}
 
         if qty_decimals is not None:
-            pos.qty = round(pos.qty, int(qty_decimals))
+            pos.qty = snap_to_decimals(pos.qty, int(qty_decimals))
         if price_decimals is not None and pos.avg_price:
-            pos.avg_price = round(pos.avg_price, int(price_decimals))
+            pos.avg_price = snap_to_decimals(pos.avg_price, int(price_decimals))
 
         if pos.qty <= 0:
             self.positions.pop(signal.symbol, None)

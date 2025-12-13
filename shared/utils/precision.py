@@ -17,6 +17,17 @@ def decimals_from_step(step: float) -> int:
     return max(0, -int(exp))
 
 
+def snap_to_decimals(value: float, decimals: int) -> float:
+    """把 float “钉死”到指定小数位，避免 repr 出现 0.30000000000004 这类噪声。"""
+    try:
+        d = int(decimals)
+    except Exception:
+        return float(value)
+    if d < 0:
+        return float(value)
+    return float(f"{float(value):.{d}f}")
+
+
 def floor_to_step(value: float, step: float) -> float:
     """把 value 向下裁剪到 step 的整数倍（避免 float 精度噪声）。"""
     if step is None:
@@ -37,5 +48,4 @@ def floor_to_step(value: float, step: float) -> float:
         out = out.quantize(Decimal(1).scaleb(-decs))
     else:
         out = out.quantize(Decimal(1))
-    return float(out)
-
+    return snap_to_decimals(float(out), decs)

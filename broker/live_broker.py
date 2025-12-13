@@ -21,7 +21,7 @@ from broker.abstract_broker import Broker, BrokerMode
 from shared.models.models import OrderSignal, Position
 from shared.state.sqlite_ledger import SqliteEventLedger
 from shared.utils.logging import setup_logger
-from shared.utils.precision import decimals_from_step, floor_to_step
+from shared.utils.precision import decimals_from_step, floor_to_step, snap_to_decimals
 from shared.utils.trade_logger import TradeLogger, TradeRecord
 
 SymbolRule = dict[str, float]
@@ -139,7 +139,12 @@ class LiveBroker(Broker):
             res = self._request("POST", "/api/v3/order", params)
             self.logger.info("Order placed: %s", res)
             price = self._extract_price(res)
-            pos, realized_delta = self._update_position_local(signal, price=price)
+            exec_qty = qty
+            try:
+                exec_qty = float(res.get("executedQty") or qty)
+            except Exception:
+                exec_qty = qty
+            pos, realized_delta = self._update_position_local(signal, price=price, exec_qty=exec_qty)
             if realized_delta:
                 self.realized_pnl_all += realized_delta
                 self.realized_pnl_today += realized_delta
@@ -436,7 +441,7 @@ class LiveBroker(Broker):
         adjusted_qty = float(qty)
         if qty_step:
             adjusted_qty = floor_to_step(adjusted_qty, float(qty_step))
-            adjusted_qty = round(adjusted_qty, decimals_from_step(float(qty_step)))
+            adjusted_qty = snap_to_decimals(adjusted_qty, decimals_from_step(float(qty_step)))
         if min_qty and adjusted_qty < min_qty:
             raise ValueError(f"quantity {adjusted_qty} < min_qty {min_qty}")
         if price is not None and min_notional and adjusted_qty * price < min_notional:
@@ -485,16 +490,29 @@ class LiveBroker(Broker):
         except Exception as exc:
             self.logger.warning("Failed to load symbol rules: %s", exc)
 
-    def _update_position_local(self, signal: OrderSignal, price: float | None) -> tuple[Position | None, float]:
+    def _update_position_local(
+        self,
+        signal: OrderSignal,
+        *,
+        price: float | None,
+        exec_qty: float | None = None,
+    ) -> tuple[Position | None, float]:
         pos = self.positions.get(signal.symbol) or Position(signal.symbol, 0.0, 0.0)
         realized_delta = 0.0
+        qty = float(exec_qty) if exec_qty is not None else float(signal.qty)
+        rule = self.symbol_rules.get(signal.symbol, {})
+        qty_step = rule.get("stepSize") or self.qty_step
+        tick = rule.get("tickSize") or self.price_step
+        qty_decimals = decimals_from_step(float(qty_step)) if qty_step else None
+        price_decimals = decimals_from_step(float(tick)) if tick else None
+
         if signal.side == "buy":
-            new_qty = pos.qty + signal.qty
+            new_qty = pos.qty + qty
             if price is not None and new_qty > 0:
-                pos.avg_price = (pos.avg_price * pos.qty + price * signal.qty) / new_qty
+                pos.avg_price = (pos.avg_price * pos.qty + price * qty) / new_qty
             pos.qty = new_qty
         elif signal.side == "sell":
-            close_qty = min(pos.qty, signal.qty)
+            close_qty = min(pos.qty, qty)
             if price is not None and close_qty > 0 and pos.qty > 0:
                 realized_delta = (price - pos.avg_price) * close_qty
             pos.qty = pos.qty - close_qty
@@ -502,6 +520,16 @@ class LiveBroker(Broker):
                 pos.avg_price = 0.0
         else:
             raise ValueError(f"Unsupported side: {signal.side}")
+
+        if qty_decimals is not None:
+            pos.qty = snap_to_decimals(pos.qty, int(qty_decimals))
+        # avg_price 只做展示级 round（本地视图），不影响交易所真实成交
+        if price_decimals is not None and pos.avg_price:
+            pos.avg_price = snap_to_decimals(pos.avg_price, int(price_decimals))
+
+        if abs(pos.qty) < 1e-12:
+            pos.qty = 0.0
+            pos.avg_price = 0.0
 
         if pos.qty <= 0:
             self.positions.pop(signal.symbol, None)
