@@ -55,4 +55,4 @@ def test_run_backtest_exports_trades_and_equity(tmp_path):
     summary = BacktestEngine(cfg_obj=cfg, artifacts_dir=out).run().summary
     assert (out / "trades.csv").exists()
     assert (out / "equity.csv").exists()
-    assert summary["metrics"]["total_trades"] >= 1
+    assert summary.metrics.total_trades >= 1

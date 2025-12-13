@@ -86,9 +86,12 @@ class TradingEngine(BaseEngine):
         }
         mode = mode_map.get(mode_str, BrokerMode.DRY_RUN)
         ledger_cfg = getattr(cfg, "ledger", None)
-        ledger_enabled = True
         ledger_path = "dataset/state/ledger.sqlite3"
-        if isinstance(ledger_cfg, dict):
+        ledger_enabled = True
+        if ledger_cfg is not None and not isinstance(ledger_cfg, dict):
+            ledger_enabled = bool(getattr(ledger_cfg, "enabled", True))
+            ledger_path = str(getattr(ledger_cfg, "path", None) or ledger_path)
+        elif isinstance(ledger_cfg, dict):
             ledger_enabled = bool(ledger_cfg.get("enabled", True))
             ledger_path = str(ledger_cfg.get("path") or ledger_path)
         ledger_path = ledger_path if ledger_enabled else None
@@ -96,7 +99,10 @@ class TradingEngine(BaseEngine):
         recovery_cfg = getattr(cfg, "recovery", None)
         recovery_enabled = True
         recovery_mode = "observe_only"
-        if isinstance(recovery_cfg, dict):
+        if recovery_cfg is not None and not isinstance(recovery_cfg, dict):
+            recovery_enabled = bool(getattr(recovery_cfg, "enabled", True))
+            recovery_mode = str(getattr(recovery_cfg, "mode", None) or recovery_mode).strip().lower()
+        elif isinstance(recovery_cfg, dict):
             recovery_enabled = bool(recovery_cfg.get("enabled", True))
             recovery_mode = str(recovery_cfg.get("mode") or recovery_mode).strip().lower()
         if mode == BrokerMode.DRY_RUN:

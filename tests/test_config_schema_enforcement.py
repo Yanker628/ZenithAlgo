@@ -57,5 +57,6 @@ def test_unknown_backtest_key_fails_fast(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError) as exc:
         load_config(str(cfg_path), load_env=False, expand_env=False)
-    assert "config.backtest contains unknown keys" in str(exc.value)
-
+    msg = str(exc.value).lower()
+    assert "unknown keys" in msg
+    assert "backtest" in msg

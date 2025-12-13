@@ -1,110 +1,40 @@
-"""配置加载与数据结构。
+"""配置加载器（Pydantic 版，M4：Schema Enforcement）。
 
 支持 YAML 配置、环境变量占位符 `${VAR}` 展开，以及 .env/.env.local 自动加载。
 """
 
+from __future__ import annotations
+
 import os
 import re
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, TypedDict, cast
-
 import yaml
+from pathlib import Path
+from typing import Any, Union
 
-from shared.config.validation import validate_raw_config
+from pydantic import ValidationError
 
+from .schema import (
+    AppConfig,
+    BacktestConfig,
+    ExchangeConfig,
+    MainConfig,
+    RiskConfig,
+    SweepConfig,
+    StrategyConfig,
+)
 
-class ExchangeConfigDict(TypedDict):
-    name: str
-    base_url: str
-    api_key: str | None
-    api_secret: str | None
-    ws_url: str | None
-    allow_live: bool | None
-    symbols_allowlist: list[str] | None
-    min_notional: float | None
-    min_qty: float | None
-    qty_step: float | None
-    price_step: float | None
-    max_price_deviation_pct: float | None
-
-
-class RiskConfigDict(TypedDict):
-    max_position_pct: float
-    max_daily_loss_pct: float
-
-
-class StrategyConfigDict(TypedDict, total=False):
-    type: str
-    # 其余字段按策略自定义；这里不做强约束
-    # 例如 simple_ma: short_window/long_window/min_ma_diff/cooldown_secs
-
-
-class RawConfigRequired(TypedDict):
-    exchange: ExchangeConfigDict
-    risk: RiskConfigDict
-    symbol: str
-    timeframe: str
-
-
-class RawConfig(RawConfigRequired, total=False):
-    mode: str
-    strategy: StrategyConfigDict
-    backtest: dict[str, Any]
-    sizing: dict[str, Any]
-    ledger: dict[str, Any]
-    recovery: dict[str, Any]
-
-
-@dataclass
-class ExchangeConfig:
-    """交易所相关配置。"""
-    name: str
-    base_url: str
-    api_key: str | None = None
-    api_secret: str | None = None
-    ws_url: str | None = None
-    allow_live: bool = False
-    symbols_allowlist: list[str] | None = None
-    min_notional: float | None = None
-    min_qty: float | None = None
-    qty_step: float | None = None
-    price_step: float | None = None
-    max_price_deviation_pct: float | None = None
-
-@dataclass
-class RiskConfig:
-    """风控参数配置。"""
-    max_position_pct: float
-    max_daily_loss_pct: float
-
-
-@dataclass
-class StrategyConfig:
-    """策略配置（type + params）。"""
-    type: str = "simple_ma"
-    params: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class AppConfig:
-    """应用总配置。"""
-    exchange: ExchangeConfig
-    risk: RiskConfig
-    symbol: str
-    timeframe: str
-    equity_base: float = 1.0
-    mode: str = "paper"
-    strategy: StrategyConfig = field(default_factory=StrategyConfig)
-    backtest: dict[str, Any] | None = None
-    sizing: dict[str, Any] | None = None
-    ledger: dict[str, Any] | None = None
-    recovery: dict[str, Any] | None = None
 
 def _load_env_file(env_path: Path):
+    """解析并加载 .env 文件到 os.environ"""
     if not env_path.exists():
         return
-    for line in env_path.read_text().splitlines():
+    # 简单的手动解析，为了不强制依赖 python-dotenv
+    try:
+        content = env_path.read_text(encoding='utf-8')
+    except Exception:
+        return
+
+    for line in content.splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -116,9 +46,7 @@ def _load_env_file(env_path: Path):
 
 
 def _load_envs(cfg_path: Path):
-    """
-    加载配置文件目录与仓库根目录下的 .env/.env.local（不覆盖已有环境变量）。
-    """
+    """加载配置文件目录与仓库根目录下的 .env/.env.local。"""
     candidates = [
         cfg_path.parent / ".env",
         cfg_path.parent / ".env.local",
@@ -129,95 +57,115 @@ def _load_envs(cfg_path: Path):
         _load_env_file(env_file)
 
 
-def load_config(path: str, load_env: bool = True, expand_env: bool = True) -> AppConfig:
-    """从 YAML 读取并解析配置。
+def _expand_env_vars(value: Any, expand: bool = True) -> Any:
+    """递归展开配置中的环境变量占位符。"""
+    if isinstance(value, str):
+        if not expand:
+            return value
+        
+        def replacer(match):
+            var_name = match.group(1)
+            if var_name not in os.environ:
+                raise ValueError(f"Missing environment variable: {var_name}")
+            return os.environ[var_name]
 
-    Parameters
-    ----------
-    path:
-        配置文件路径。
-    load_env:
-        是否自动加载 .env/.env.local。
-    expand_env:
-        是否展开 `${VAR}` 占位符。
+        return re.sub(r"\$\{([^}]+)\}", replacer, value)
+    
+    if isinstance(value, dict):
+        return {k: _expand_env_vars(v, expand) for k, v in value.items()}
+    
+    if isinstance(value, list):
+        return [_expand_env_vars(v, expand) for v in value]
+    
+    return value
 
-    Returns
-    -------
-    AppConfig
-        解析后的配置对象。
 
-    Raises
-    ------
-    FileNotFoundError
-        配置文件不存在。
-    ValueError
-        缺少必填字段或缺失环境变量。
+def load_config(
+    path: Union[str, Path] = "config/config.yml", 
+    load_env: bool = True, 
+    expand_env: bool = True
+) -> MainConfig:
+    """加载并验证配置。
+
+    Returns:
+        MainConfig: 强类型的配置对象。
     """
     cfg_path = Path(path)
     if not cfg_path.exists():
         raise FileNotFoundError(f"Config file not found: {cfg_path}")
 
+    # 1. 加载环境变量
     if load_env:
         _load_envs(cfg_path)
 
+    # 2. 读取 YAML
     with cfg_path.open("r", encoding="utf-8") as f:
-        raw_cfg: dict[str, Any] = yaml.safe_load(f) or {}
+        raw_cfg = yaml.safe_load(f) or {}
 
-    def _expand_env(value: Any) -> Any:
-        if isinstance(value, str):
-            if not expand_env:
-                return value
-            # 保留未设置的变量占位符，避免静默替换为空
-            def replacer(match):
-                var_name = match.group(1)
-                if var_name not in os.environ:
-                    raise ValueError(f"Missing environment variable: {var_name}")
-                return os.environ[var_name]
+    # 3. 展开环境变量 (保持原来的 strict 检查)
+    expanded_cfg = _expand_env_vars(raw_cfg, expand=expand_env)
 
-            return re.sub(r"\$\{([^}]+)\}", replacer, value)
-        if isinstance(value, dict):
-            return {k: _expand_env(v) for k, v in value.items()}
-        if isinstance(value, list):
-            return [_expand_env(v) for v in value]
-        return value
+    # 4. 特殊字段预处理：backtest 补齐 symbol
+    if "backtest" in expanded_cfg and isinstance(expanded_cfg["backtest"], dict):
+        bt = expanded_cfg["backtest"]
+        if "symbol" not in bt and "symbol" in expanded_cfg:
+            bt["symbol"] = expanded_cfg["symbol"]
 
-    cfg = cast(RawConfig, _expand_env(raw_cfg))
-    validate_raw_config(cast(dict[str, Any], cfg))
+    # 5. 策略参数提取：扁平化字段归入 params（以便 schema 严格 forbid）
+    # 原逻辑：strat_cfg_raw 里的非 type 字段都挪到 params
+    if "strategy" in expanded_cfg and isinstance(expanded_cfg["strategy"], dict):
+        strat_dict = expanded_cfg["strategy"]
+        strat_type = strat_dict.get("type", "simple_ma")
+        # 复制所有参数到 params，Pydantic 的 StrategyConfig 会处理
+        params = {k: v for k, v in strat_dict.items() if k != "type"}
+        # 如果原来没有 params 字段，就用提取出来的；如果原来有，就合并
+        existing_params = strat_dict.get("params", {})
+        final_params = {**params, **existing_params}
+        
+        expanded_cfg["strategy"] = {
+            "type": strat_type,
+            "params": final_params
+        }
 
+    # 5.1 backtest.strategy 同样做扁平化（扫参/回测覆盖参数习惯直接写在 strategy 下）
+    if "backtest" in expanded_cfg and isinstance(expanded_cfg["backtest"], dict):
+        bt = expanded_cfg["backtest"]
+        if "strategy" in bt and isinstance(bt["strategy"], dict):
+            bt_strat = bt["strategy"]
+            bt_type = bt_strat.get("type")
+            params = {k: v for k, v in bt_strat.items() if k != "type" and k != "params"}
+            existing_params = bt_strat.get("params", {})
+            final_params = {**params, **(existing_params if isinstance(existing_params, dict) else {})}
+            bt["strategy"] = {"type": bt_type} if bt_type else {}
+            bt["strategy"]["type"] = bt_type or expanded_cfg.get("strategy", {}).get("type", "simple_ma")
+            bt["strategy"]["params"] = final_params
+
+    # 6. Mode 归一化 (保留原逻辑)
+    if "mode" in expanded_cfg:
+        expanded_cfg["mode"] = expanded_cfg["mode"].replace("_", "-").lower()
+
+    # 7. Pydantic 转换与校验
     try:
-        exchange_cfg = ExchangeConfig(**cast(dict[str, Any], cfg["exchange"]))
-        risk_cfg = RiskConfig(**cast(dict[str, Any], cfg["risk"]))
-        symbol: str = cfg["symbol"]
-        timeframe: str = cfg["timeframe"]
-        equity_base: float = float(cfg.get("equity_base", 1.0))
-        mode_raw: str = cfg.get("mode", "paper")
-        mode: str = mode_raw.replace("_", "-").lower()
-        strat_cfg_raw = cfg.get("strategy", {}) or {}
-        strat_type = cast(dict[str, Any], strat_cfg_raw).get("type", "simple_ma")
-        params = dict(cast(dict[str, Any], strat_cfg_raw))
-        params.pop("type", None)
-        strategy_cfg = StrategyConfig(type=strat_type, params=params)
-        backtest_cfg = cfg.get("backtest")
-        sizing_cfg = cfg.get("sizing")
-        ledger_cfg = cfg.get("ledger")
-        recovery_cfg = cfg.get("recovery")
-        # 确保 backtest 至少有 symbol 键，便于回测/测试访问
-        if isinstance(backtest_cfg, dict) and "symbol" not in backtest_cfg:
-            backtest_cfg["symbol"] = symbol
-    except KeyError as exc:
-        missing = exc.args[0]
-        raise ValueError(f"Missing required config key: {missing}") from exc
+        return MainConfig(**expanded_cfg)
+    except ValidationError as exc:
+        unknown = []
+        for err in exc.errors():
+            if err.get("type") == "extra_forbidden":
+                loc = err.get("loc") or ()
+                unknown.append(".".join(str(x) for x in loc))
+        if unknown:
+            raise ValueError(f"config contains unknown keys: {', '.join(sorted(set(unknown)))}") from exc
+        raise ValueError(f"Configuration validation failed: {exc}") from exc
 
-    return AppConfig(
-        exchange=exchange_cfg,
-        risk=risk_cfg,
-        symbol=symbol,
-        timeframe=timeframe,
-        equity_base=equity_base,
-        mode=mode,
-        strategy=strategy_cfg,
-        backtest=backtest_cfg,
-        sizing=sizing_cfg if isinstance(sizing_cfg, dict) else None,
-        ledger=ledger_cfg if isinstance(ledger_cfg, dict) else None,
-        recovery=recovery_cfg if isinstance(recovery_cfg, dict) else None,
-    )
+
+# 兼容旧导入：历史代码/测试可能从 config_loader 导入这些名字
+__all__ = [
+    "load_config",
+    "AppConfig",
+    "MainConfig",
+    "ExchangeConfig",
+    "RiskConfig",
+    "StrategyConfig",
+    "BacktestConfig",
+    "SweepConfig",
+]

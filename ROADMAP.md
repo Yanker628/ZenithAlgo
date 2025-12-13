@@ -35,11 +35,12 @@
 - `engine/base_engine.py` 提供统一 `run_loop(...)`，回测/实盘复用同一事件循环。
 - 事件源集中在 `engine/sources/*`（回测 `EventSource`，实盘 `MarketEventSource`）。
 
-### M4：Schema Enforcement（已完成：轻量版）
+### M4：Schema Enforcement（已完成）
 
-- 启动阶段配置严格校验（未知 key 直接失败）：`shared/config/validation.py`。
+- 配置强类型化：`shared/config/schema.py` + `shared/config/config_loader.py`（Pydantic；未知 key 直接失败）。
 - 实验产物结构版本化：`meta.json/summary.json/results.json` 写入 `schema_version`；
   同时包含复现骨钉（如 `git_sha/config_hash/data_hash/created_at`）。
+- 回测总结强类型化：`engine/backtest_engine.py` 返回 `research/schemas.py:BacktestSummary`，避免深层字典索引。
 - 配套测试覆盖“写入 + 读取再校验”的复现契约。
 
 ### M5：State Recovery（已完成：M5-1 ~ M5-3）
@@ -70,7 +71,7 @@
 
 目标：在保持开发速度的同时，让系统边界“可演进、可迁移、可验证”。
 
-- M4-1：配置模型化（可选引入 Pydantic），并保留 `shared/config/validation.py` 作为前置保险。
+- M4-1：配置/回测总结已模型化；下一步是把 sizing/policy 等“开放 dict”逐步收敛为版本化 schema。
 - M4-2：收敛 `research/schemas.py`：
   - 统一定义 `meta/summary/results` schema；
   - 提供离线校验入口（用于历史结果巡检与迁移脚本）。

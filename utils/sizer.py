@@ -31,8 +31,8 @@ def resolve_sizing_cfg(cfg) -> dict[str, Any]:
     if isinstance(sizing, dict):
         return sizing
     bt = getattr(cfg, "backtest", None)
-    if isinstance(bt, dict):
-        bt_sizing = bt.get("sizing")
+    if bt is not None:
+        bt_sizing = getattr(bt, "sizing", None) if not isinstance(bt, dict) else bt.get("sizing")
         if isinstance(bt_sizing, dict):
             return bt_sizing
     return {}

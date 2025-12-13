@@ -19,7 +19,8 @@ def test_load_config_expands_env_and_returns_appconfig(monkeypatch: pytest.Monke
     assert cfg.exchange.api_key == "dummy_key"
     assert cfg.equity_base == 1000
     assert cfg.mode == "paper"
-    assert cfg.backtest["symbol"] == "BTCUSDT"
+    assert cfg.backtest is not None
+    assert cfg.backtest.symbol == "BTCUSDT"
     assert cfg.risk.max_position_pct > 0
 
 

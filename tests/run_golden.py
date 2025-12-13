@@ -13,7 +13,7 @@ def _load_expected() -> dict:
 
 
 def _extract_actual(summary: dict) -> dict:
-    metrics = summary.get("metrics", {}) if isinstance(summary, dict) else {}
+    metrics = summary.metrics.model_dump()
     keys = ["total_return", "max_drawdown", "sharpe", "total_trades", "profit_factor"]
     out = {k: metrics.get(k) for k in keys}
     if out.get("profit_factor") == float("inf"):
@@ -27,7 +27,7 @@ def run_golden(tol: float = 1e-6) -> int:
     cfg_path = "config/golden_backtest.yml"
     cfg = load_config(cfg_path, load_env=False, expand_env=False)
     summary = BacktestEngine(cfg_obj=cfg, artifacts_dir=None).run().summary
-    metrics = summary.get("metrics", {}) if isinstance(summary, dict) else {}
+    metrics = summary.metrics.model_dump()
     missing = [k for k in CANONICAL_METRIC_KEYS if k not in metrics]
     if missing:
         print("Golden backtest FAILED: metrics missing keys:", missing)

@@ -10,7 +10,7 @@ from typing import Any, List
 
 from engine.backtest_engine import BacktestEngine
 from engine.base_engine import BaseEngine, EngineResult
-from shared.config.config_loader import load_config
+from shared.config.config_loader import BacktestConfig, SweepConfig, load_config
 from shared.utils.logging import setup_logger
 from utils.param_search import grid_search, random_search, SweepResult
 from analysis.visualizations.plotter import plot_sweep_heatmap
@@ -20,7 +20,7 @@ def _run_sweep_for_symbol(
     *,
     cfg_path: str,
     symbol: str,
-    sweep_cfg: dict,
+    sweep_cfg: SweepConfig,
     output_dir: Path,
     logger=None,
 ) -> tuple[List[SweepResult], dict[str, Any]]:
@@ -43,30 +43,30 @@ def _run_sweep_for_symbol(
     cfg = load_config(cfg_path, load_env=False, expand_env=False)
 
     # 把 symbol 写回 backtest 配置里，方便 run_backtest / param_search 使用
-    if not getattr(cfg, "backtest", None):
+    if not isinstance(getattr(cfg, "backtest", None), BacktestConfig):
         raise ValueError("backtest config not found")
-    cfg.backtest["symbol"] = str(symbol)  # type: ignore[index]
+    cfg.backtest.symbol = str(symbol)  # type: ignore[union-attr]
 
-    mode = sweep_cfg.get("mode", "grid")
-    param_grid = sweep_cfg.get("params", {})  # 注意：你的 yml 里叫 params，不是 param_grid
+    mode = str(sweep_cfg.mode or "grid")
+    param_grid = dict(sweep_cfg.params or {})
 
     # 从 objective 里抽权重，转成 param_search 期望的 weights 结构
-    obj = sweep_cfg.get("objective", {}) or {}
+    obj = sweep_cfg.objective
     weights = {
-        "total_return": float(obj.get("total_return_weight", 0.0)),
-        "sharpe": float(obj.get("sharpe_weight", 0.0)),
-        "max_drawdown": float(obj.get("max_drawdown_weight", 0.0)),
+        "total_return": float(obj.total_return_weight),
+        "sharpe": float(obj.sharpe_weight),
+        "max_drawdown": float(obj.max_drawdown_weight),
     }
 
-    interval = cfg.backtest.get("interval", "NA")  # type: ignore[index]
+    interval = cfg.backtest.interval  # type: ignore[union-attr]
     output_dir.mkdir(parents=True, exist_ok=True)
     output_csv = str(output_dir / f"{symbol}_{interval}_sweep.csv")
 
     # 过滤/惩罚配置
-    min_trades = sweep_cfg.get("min_trades")
-    max_dd_filter = sweep_cfg.get("max_drawdown")
-    min_sharpe = sweep_cfg.get("min_sharpe")
-    low_trades_penalty = float(sweep_cfg.get("low_trades_penalty", 0.0))
+    min_trades = sweep_cfg.min_trades
+    max_dd_filter = sweep_cfg.max_drawdown
+    min_sharpe = sweep_cfg.min_sharpe
+    low_trades_penalty = float(sweep_cfg.low_trades_penalty)
     filters = {
         "min_trades": min_trades,
         "max_drawdown": max_dd_filter,
@@ -74,7 +74,7 @@ def _run_sweep_for_symbol(
     }
 
     if mode == "random":
-        n_samples = int(sweep_cfg.get("n_random", 20))
+        n_samples = int(sweep_cfg.n_random)
         results = random_search(
             cfg_path,
             param_grid,
@@ -132,16 +132,16 @@ class OptimizationEngine(BaseEngine):
         logger = setup_logger("optimize")
         cfg = load_config(self._cfg_path, load_env=False, expand_env=False)
         bt_cfg = getattr(cfg, "backtest", None)
-        if not isinstance(bt_cfg, dict):
+        if not isinstance(bt_cfg, BacktestConfig):
             raise ValueError("backtest config not found")
 
-        sweep_cfg = bt_cfg.get("sweep")
-        if not isinstance(sweep_cfg, dict) or not sweep_cfg.get("enabled"):
+        sweep_cfg = bt_cfg.sweep
+        if sweep_cfg is None or not sweep_cfg.enabled:
             summary = BacktestEngine(cfg_path=self._cfg_path).run().summary
             return EngineResult(summary=summary)
 
-        symbols_cfg = bt_cfg.get("symbols")
-        symbols = [str(s) for s in symbols_cfg] if symbols_cfg else [str(bt_cfg.get("symbol"))]
+        symbols_cfg = bt_cfg.symbols
+        symbols = [str(s) for s in symbols_cfg] if symbols_cfg else [str(bt_cfg.symbol)]
 
         base_out_dir = Path(self._artifacts_dir) if self._artifacts_dir is not None else Path("results") / "sweep_engine"
         base_out_dir.mkdir(parents=True, exist_ok=True)

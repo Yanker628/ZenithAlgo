@@ -13,7 +13,7 @@ from typing import Any, List, Tuple
 from engine.backtest_engine import BacktestEngine, parse_iso
 from engine.base_engine import BaseEngine, EngineResult
 from utils.best_params import pick_best_params
-from shared.config.config_loader import load_config
+from shared.config.config_loader import BacktestConfig, load_config
 from shared.utils.logging import setup_logger
 from analysis.metrics.metrics_canon import CANONICAL_METRIC_KEYS, canonicalize_metrics
 from utils.param_search import grid_search, random_search
@@ -59,13 +59,13 @@ class WalkforwardEngine(BaseEngine):
         logger = setup_logger("walkforward")
         cfg = load_config(self._cfg_path, load_env=False, expand_env=False)
         bt_cfg = getattr(cfg, "backtest", None)
-        if not isinstance(bt_cfg, dict):
+        if not isinstance(bt_cfg, BacktestConfig):
             raise ValueError("backtest config not found")
 
-        symbol = bt_cfg.get("symbol", cfg.symbol)
-        interval = bt_cfg.get("interval", cfg.timeframe)
-        start = parse_iso(bt_cfg["start"])
-        end = parse_iso(bt_cfg["end"])
+        symbol = bt_cfg.symbol
+        interval = bt_cfg.interval
+        start = parse_iso(bt_cfg.start)
+        end = parse_iso(bt_cfg.end)
         segments = _split_segments(start, end, self._n_segments, self._train_ratio)
 
         results: dict[str, Any] = {"segments": [], "overall": {}}
@@ -73,21 +73,23 @@ class WalkforwardEngine(BaseEngine):
         out_dir.mkdir(parents=True, exist_ok=True)
         artifacts: dict[str, Any] = {"dir": str(out_dir), "segments": []}
 
-        sweep_cfg = bt_cfg.get("sweep", {}) or {}
-        mode = str(sweep_cfg.get("mode", "grid")).lower()
-        param_grid = sweep_cfg.get("params", {}) or {}
-        obj = sweep_cfg.get("objective", {}) or {}
+        sweep_cfg = bt_cfg.sweep
+        mode = str(getattr(sweep_cfg, "mode", "grid")).lower()
+        param_grid = dict(getattr(sweep_cfg, "params", {}) or {})
+        obj = getattr(sweep_cfg, "objective", None)
         weights = {
-            "total_return": float(obj.get("total_return_weight", 0.0)),
-            "sharpe": float(obj.get("sharpe_weight", 0.0)),
-            "max_drawdown": float(obj.get("max_drawdown_weight", 0.0)),
+            "total_return": float(getattr(obj, "total_return_weight", 0.0)),
+            "sharpe": float(getattr(obj, "sharpe_weight", 0.0)),
+            "max_drawdown": float(getattr(obj, "max_drawdown_weight", 0.0)),
         }
-        filters = sweep_cfg.get("filters") or {
-            "min_trades": sweep_cfg.get("min_trades"),
-            "max_drawdown": sweep_cfg.get("max_drawdown"),
-            "min_sharpe": sweep_cfg.get("min_sharpe"),
-        }
-        low_trades_penalty = float(sweep_cfg.get("low_trades_penalty", 0.0))
+        filters = getattr(sweep_cfg, "filters", None) if sweep_cfg is not None else None
+        if not isinstance(filters, dict):
+            filters = {
+                "min_trades": getattr(sweep_cfg, "min_trades", None),
+                "max_drawdown": getattr(sweep_cfg, "max_drawdown", None),
+                "min_sharpe": getattr(sweep_cfg, "min_sharpe", None),
+            }
+        low_trades_penalty = float(getattr(sweep_cfg, "low_trades_penalty", 0.0)) if sweep_cfg is not None else 0.0
 
         for idx, ((train_start, train_end), (test_start, test_end)) in enumerate(segments, 1):
             logger.info(
@@ -99,16 +101,16 @@ class WalkforwardEngine(BaseEngine):
                 test_start.isoformat(),
                 test_end.isoformat(),
             )
-            bt_train = deepcopy(bt_cfg)
-            bt_train["start"] = train_start.isoformat()
-            bt_train["end"] = train_end.isoformat()
-            bt_train["skip_plots"] = True
-            cfg_train = deepcopy(cfg)
+            bt_train = bt_cfg.model_copy(deep=True)
+            bt_train.start = train_start.isoformat()
+            bt_train.end = train_end.isoformat()
+            bt_train.skip_plots = True
+            cfg_train = cfg.model_copy(deep=True)
             cfg_train.backtest = bt_train  # type: ignore[assignment]
 
             sweep_csv = out_dir / f"{symbol}_{interval}_wf_train{idx}.csv"
             if mode == "random":
-                n_samples = int(sweep_cfg.get("n_random", 20))
+                n_samples = int(getattr(sweep_cfg, "n_random", 20)) if sweep_cfg is not None else 20
                 random_search(
                     self._cfg_path,
                     param_grid,
@@ -132,20 +134,23 @@ class WalkforwardEngine(BaseEngine):
             best_params = pick_best_params(sweep_csv, min_trades=self._min_trades)
             logger.info("Segment %s best params: %s", idx, best_params)
 
-            bt_test = deepcopy(bt_cfg)
-            bt_test["start"] = test_start.isoformat()
-            bt_test["end"] = test_end.isoformat()
-            bt_test["skip_plots"] = True
-            bt_test["strategy"] = deepcopy(bt_test.get("strategy", {}))
-            bt_test["strategy"].update(best_params)
-            cfg_test = deepcopy(cfg)
+            bt_test = bt_cfg.model_copy(deep=True)
+            bt_test.start = test_start.isoformat()
+            bt_test.end = test_end.isoformat()
+            bt_test.skip_plots = True
+            bt_test_strategy = bt_test.strategy.model_copy(deep=True) if bt_test.strategy else None
+            if bt_test_strategy is None:
+                bt_test_strategy = cfg.strategy.model_copy(deep=True)
+            bt_test_strategy.params = {**dict(bt_test_strategy.params or {}), **dict(best_params)}
+            bt_test.strategy = bt_test_strategy
+            cfg_test = cfg.model_copy(deep=True)
             cfg_test.backtest = bt_test  # type: ignore[assignment]
 
             artifacts_dir = None
             if self._artifacts_base_dir:
                 artifacts_dir = str(Path(self._artifacts_base_dir) / f"seg{idx}" / "test_backtest")
             summary = BacktestEngine(cfg_obj=cfg_test, artifacts_dir=artifacts_dir).run().summary
-            metrics = canonicalize_metrics(summary.get("metrics", {}) if isinstance(summary, dict) else {})
+            metrics = canonicalize_metrics(summary.metrics.model_dump() if hasattr(summary, "metrics") else {})
             results["segments"].append(
                 {
                     "train": [train_start.isoformat(), train_end.isoformat()],

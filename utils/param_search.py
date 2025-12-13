@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from engine.backtest_engine import BacktestEngine
-from shared.config.config_loader import load_config
+from shared.config.config_loader import BacktestConfig, StrategyConfig, load_config
 
 
 @dataclass
@@ -89,11 +89,15 @@ def _write_csv(path: Path, rows: Iterable[dict]) -> None:
         writer.writerows(rows)
 
 
-def _prepare_output_path(backtest_cfg: dict, output_csv: str | None, prefix: str = "ma_sweep") -> Path:
+def _prepare_output_path(backtest_cfg: BacktestConfig | dict, output_csv: str | None, prefix: str = "ma_sweep") -> Path:
     if output_csv:
         return Path(output_csv)
-    symbol = backtest_cfg.get("symbol", "UNKNOWN")
-    interval = backtest_cfg.get("interval", "NA")
+    if isinstance(backtest_cfg, BacktestConfig):
+        symbol = backtest_cfg.symbol
+        interval = backtest_cfg.interval
+    else:
+        symbol = backtest_cfg.get("symbol", "UNKNOWN")
+        interval = backtest_cfg.get("interval", "NA")
     filename = f"{prefix}_{symbol}_{interval}.csv"
     return Path("results") / "research" / filename
 
@@ -105,22 +109,24 @@ def _run_single_combo(
     filters: dict | None = None,
     low_trades_penalty: float = 0.0,
 ) -> SweepResult:
-    cfg = deepcopy(cfg_base)
-    bt_cfg = deepcopy(cfg.backtest)
-    # sweep 参数默认视为策略参数：写入 backtest.strategy，避免污染 backtest 顶层键
-    bt_strategy = dict(bt_cfg.get("strategy", {}) or {})
-    bt_strategy.update(combo)
-    bt_cfg["strategy"] = bt_strategy
-    # 批量扫描时不需要绘图
-    bt_cfg["skip_plots"] = True
+    cfg = cfg_base.model_copy(deep=True) if hasattr(cfg_base, "model_copy") else deepcopy(cfg_base)
+    bt_cfg = getattr(cfg, "backtest", None)
+    if not isinstance(bt_cfg, BacktestConfig):
+        raise ValueError("backtest config not found")
+
+    bt_cfg = bt_cfg.model_copy(deep=True)
+    bt_strategy = bt_cfg.strategy.model_copy(deep=True) if bt_cfg.strategy else StrategyConfig(type=cfg.strategy.type, params=dict(cfg.strategy.params))
+    bt_strategy.params = {**dict(bt_strategy.params or {}), **dict(combo)}
+    bt_cfg.strategy = bt_strategy
+    bt_cfg.skip_plots = True
     cfg.backtest = bt_cfg  # type: ignore[assignment]
 
-    summary_dict = BacktestEngine(cfg_obj=cfg).run().summary
-    metrics = summary_dict.get("metrics", {})
+    summary = BacktestEngine(cfg_obj=cfg).run().summary
+    metrics = summary.metrics.model_dump() if hasattr(summary, "metrics") else {}
     score = _calc_score(metrics, weights, low_trades_penalty=low_trades_penalty)
     reason = _filter_reason(metrics, filters)
     passed = reason is None
-    symbol = bt_cfg.get("symbol", "")
+    symbol = bt_cfg.symbol
     return SweepResult(symbol=symbol, params=combo, metrics=metrics, score=score, passed=passed, filter_reason=reason)
 
 
@@ -158,9 +164,9 @@ def grid_search(
         所有组合结果。
     """
     cfg = cfg_obj or load_config(cfg_path, load_env=False, expand_env=False)
-    if not cfg.backtest:
+    if not isinstance(getattr(cfg, "backtest", None), BacktestConfig):
         raise ValueError("backtest config not found")
-    cfg_base = deepcopy(cfg)
+    cfg_base = cfg.model_copy(deep=True) if hasattr(cfg, "model_copy") else deepcopy(cfg)
 
     combos = _product_dict(param_grid)
     results: list[SweepResult] = []
@@ -175,7 +181,7 @@ def grid_search(
         else:
             filter_stats[reason] = filter_stats.get(reason, 0) + 1
 
-    out_path = _prepare_output_path(cfg.backtest, output_csv)
+    out_path = _prepare_output_path(cfg.backtest, output_csv)  # type: ignore[arg-type]
     rows = []
     for r in results:
         row = {
@@ -211,9 +217,9 @@ def random_search(
 ) -> List[SweepResult]:
     """随机搜索（从网格中抽样 n_samples 组）。"""
     cfg = cfg_obj or load_config(cfg_path, load_env=False, expand_env=False)
-    if not cfg.backtest:
+    if not isinstance(getattr(cfg, "backtest", None), BacktestConfig):
         raise ValueError("backtest config not found")
-    cfg_base = deepcopy(cfg)
+    cfg_base = cfg.model_copy(deep=True) if hasattr(cfg, "model_copy") else deepcopy(cfg)
 
     combos = _product_dict(param_grid)
     if n_samples < len(combos):
@@ -230,7 +236,7 @@ def random_search(
         else:
             filter_stats[reason] = filter_stats.get(reason, 0) + 1
 
-    out_path = _prepare_output_path(cfg.backtest, output_csv, prefix="ma_sweep_random")
+    out_path = _prepare_output_path(cfg.backtest, output_csv, prefix="ma_sweep_random")  # type: ignore[arg-type]
     rows = []
     for r in results:
         row = {

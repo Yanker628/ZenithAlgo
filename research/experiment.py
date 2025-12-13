@@ -14,7 +14,7 @@ import json
 import shutil
 import subprocess
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,7 +26,7 @@ from utils.hashing import sha256_files, sha256_text
 from utils.json_sanitize import sanitize_for_json
 from analysis.metrics.metrics_canon import canonicalize_metrics, validate_metrics_schema
 from utils.policy import evaluate_policy
-from shared.config.config_loader import load_config
+from shared.config.config_loader import BacktestConfig, load_config
 from shared.utils.logging import setup_logger
 from utils.param_search import grid_search, random_search
 from analysis.visualizations.plotter import plot_param_1d, plot_param_importance, plot_sweep_heatmaps
@@ -69,9 +69,11 @@ def _config_hash(cfg_path: str) -> str:
 
 
 def _data_hashes(cfg_obj, *, symbols: list[str]) -> tuple[str, dict[str, str]]:
-    bt_cfg = getattr(cfg_obj, "backtest", None) or {}
-    data_dir = str(bt_cfg.get("data_dir", "dataset/history"))
-    interval = str(bt_cfg.get("interval", getattr(cfg_obj, "timeframe", "")))
+    bt_cfg = getattr(cfg_obj, "backtest", None)
+    if not isinstance(bt_cfg, BacktestConfig):
+        raise ValueError("backtest config not found")
+    data_dir = str(bt_cfg.data_dir)
+    interval = str(bt_cfg.interval)
     paths = [Path(data_dir) / f"{s}_{interval}.csv" for s in symbols]
     return sha256_files(paths)
 
@@ -148,16 +150,17 @@ def _dump_effective_cfg(cfg_obj, path: Path) -> None:
     strategy_obj = getattr(cfg_obj, "strategy", None)
     risk_obj = getattr(cfg_obj, "risk", None)
     exchange_obj = getattr(cfg_obj, "exchange", None)
+    backtest_obj = getattr(cfg_obj, "backtest", None)
     payload = {
         "mode": getattr(cfg_obj, "mode", None),
         "symbol": getattr(cfg_obj, "symbol", None),
         "timeframe": getattr(cfg_obj, "timeframe", None),
         "equity_base": getattr(cfg_obj, "equity_base", None),
-        "strategy": asdict(strategy_obj) if strategy_obj is not None else None,
+        "strategy": (strategy_obj.model_dump() if hasattr(strategy_obj, "model_dump") else None), # type: ignore
         "sizing": getattr(cfg_obj, "sizing", None),
-        "backtest": getattr(cfg_obj, "backtest", None),
-        "risk": asdict(risk_obj) if risk_obj is not None else None,
-        "exchange": asdict(exchange_obj) if exchange_obj is not None else None,
+        "backtest": (backtest_obj.model_dump() if hasattr(backtest_obj, "model_dump") else backtest_obj), # type: ignore
+        "risk": (risk_obj.model_dump() if hasattr(risk_obj, "model_dump") else None), # type: ignore
+        "exchange": (exchange_obj.model_dump() if hasattr(exchange_obj, "model_dump") else None), # type: ignore
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = sanitize_for_json(payload)
@@ -187,13 +190,17 @@ def _ensure_config_snapshot(cfg_path: str, out_dir: Path) -> None:
         setup_logger("experiment").warning("effective_config.json fallback written: %s", exc)
 
 
-def _select_heatmap_axes(param_grid: dict[str, Any], sweep_cfg: dict[str, Any]) -> tuple[str, str, str]:
+def _select_heatmap_axes(param_grid: dict[str, Any], sweep_cfg: Any) -> tuple[str, str, str]:
     """
     配置命名一致性要求：
     - 默认从 sweep.params 取前两个维度作为 x/y 轴（不硬编码 short/long）
     - 支持 backtest.sweep.heatmap 显式指定 x/y/value
     """
-    heatmap_cfg = sweep_cfg.get("heatmap") if isinstance(sweep_cfg, dict) else None
+    heatmap_cfg = None
+    if isinstance(sweep_cfg, dict):
+        heatmap_cfg = sweep_cfg.get("heatmap")
+    else:
+        heatmap_cfg = getattr(sweep_cfg, "heatmap", None)
     heatmap_cfg = heatmap_cfg if isinstance(heatmap_cfg, dict) else {}
 
     x = heatmap_cfg.get("x") or heatmap_cfg.get("x_param")
@@ -237,14 +244,16 @@ class ExperimentResult:
 def run_backtest_experiment(cfg_path: str) -> ExperimentResult:
     logger = setup_logger("experiment")
     cfg = load_config(cfg_path, load_env=False, expand_env=False)
-    bt_cfg = cfg.backtest or {}
+    bt_cfg = cfg.backtest
+    if not isinstance(bt_cfg, BacktestConfig):
+        raise ValueError("backtest config not found")
     run_id = _utc_ts()
     run_ts = _utc_iso()
     meta = {
-        "symbol": bt_cfg.get("symbol", cfg.symbol),
-        "interval": bt_cfg.get("interval", cfg.timeframe),
-        "start": bt_cfg.get("start"),
-        "end": bt_cfg.get("end"),
+        "symbol": bt_cfg.symbol,
+        "interval": bt_cfg.interval,
+        "start": bt_cfg.start,
+        "end": bt_cfg.end,
         "run_id": run_id,
         "run_ts": run_ts,
         "git": _git_info(),
@@ -252,7 +261,7 @@ def run_backtest_experiment(cfg_path: str) -> ExperimentResult:
     out_dir = _experiment_dir("backtest", meta)
     _ensure_config_snapshot(cfg_path, out_dir)
     summary = BacktestEngine(cfg_obj=cfg, artifacts_dir=out_dir).run().summary
-    metrics = canonicalize_metrics(summary.get("metrics", {}) if isinstance(summary, dict) else {})
+    metrics = canonicalize_metrics(summary.metrics.model_dump() if hasattr(summary, "metrics") else {})
     artifacts = {
         "dir": str(out_dir),
         "trades_csv": "trades.csv",
@@ -286,8 +295,8 @@ def run_backtest_experiment(cfg_path: str) -> ExperimentResult:
         policy=policy,
         artifacts=artifacts,
         details={
-            "signal_trace": summary.get("signal_trace") if isinstance(summary, dict) else None,
-            "data_health": summary.get("data_health") if isinstance(summary, dict) else None,
+            "signal_trace": summary.signal_trace if hasattr(summary, "signal_trace") else None,
+            "data_health": summary.data_health.model_dump() if hasattr(summary, "data_health") else None,
         },
     )
     _write_json(
@@ -297,12 +306,18 @@ def run_backtest_experiment(cfg_path: str) -> ExperimentResult:
             "task": "backtest",
             "meta": meta,
             "meta_json": meta_json,
-            "summary": summary,
+            "summary": summary.model_dump() if hasattr(summary, "model_dump") else summary,
             "summary_json": summary_json,
             "artifacts": artifacts,
         },
     )
-    write_report_md(out_dir / "report.md", task="backtest", meta=meta, summary=summary, artifacts=artifacts)
+    write_report_md(
+        out_dir / "report.md",
+        task="backtest",
+        meta=meta,
+        summary=summary.model_dump() if hasattr(summary, "model_dump") else summary,
+        artifacts=artifacts,
+    )
     write_summary_md(out_dir / "summary.md", task="backtest", meta=meta, metrics=metrics, plots=[str(out_dir / "equity.png")])
     logger.info("Experiment saved: %s", out_dir)
     return ExperimentResult(task="backtest", meta=meta, metrics=metrics, artifacts=artifacts)
@@ -311,15 +326,17 @@ def run_backtest_experiment(cfg_path: str) -> ExperimentResult:
 def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
     logger = setup_logger("experiment")
     cfg = load_config(cfg_path, load_env=False, expand_env=False)
-    bt_cfg = cfg.backtest or {}
-    sweep_cfg = (bt_cfg.get("sweep") or {}) if isinstance(bt_cfg, dict) else {}
+    bt_cfg = cfg.backtest
+    if not isinstance(bt_cfg, BacktestConfig):
+        raise ValueError("backtest config not found")
+    sweep_cfg = bt_cfg.sweep
     run_id = _utc_ts()
     run_ts = _utc_iso()
     meta = {
-        "symbol": bt_cfg.get("symbol", cfg.symbol),
-        "interval": bt_cfg.get("interval", cfg.timeframe),
-        "start": bt_cfg.get("start"),
-        "end": bt_cfg.get("end"),
+        "symbol": bt_cfg.symbol,
+        "interval": bt_cfg.interval,
+        "start": bt_cfg.start,
+        "end": bt_cfg.end,
         "run_id": run_id,
         "run_ts": run_ts,
         "git": _git_info(),
@@ -328,36 +345,40 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
     _ensure_config_snapshot(cfg_path, out_dir)
     logger.info("Sweep experiment dir: %s", out_dir)
 
-    symbols_cfg = bt_cfg.get("symbols")
-    symbols = [str(s) for s in symbols_cfg] if symbols_cfg else [str(bt_cfg.get("symbol", cfg.symbol))]
+    symbols_cfg = bt_cfg.symbols
+    symbols = [str(s) for s in symbols_cfg] if symbols_cfg else [str(bt_cfg.symbol)]
 
     all_results: dict[str, Any] = {}
     for sym in symbols:
-        cfg_sym = deepcopy(cfg)
-        cfg_sym.backtest = deepcopy(cfg_sym.backtest) if cfg_sym.backtest else {}  # type: ignore[assignment]
-        cfg_sym.backtest["symbol"] = sym  # type: ignore[index]
+        cfg_sym = cfg.model_copy(deep=True)
+        if not isinstance(cfg_sym.backtest, BacktestConfig):
+            raise ValueError("backtest config not found")
+        cfg_sym.backtest = cfg_sym.backtest.model_copy(deep=True)
+        cfg_sym.backtest.symbol = sym
 
-        mode = str(sweep_cfg.get("mode", "grid")).lower()
-        param_grid = sweep_cfg.get("params", {}) or {}
-        obj = sweep_cfg.get("objective", {}) or {}
+        mode = str(getattr(sweep_cfg, "mode", "grid")).lower()
+        param_grid = dict(getattr(sweep_cfg, "params", {}) or {})
+        obj = getattr(sweep_cfg, "objective", None)
         weights = {
-            "total_return": float(obj.get("total_return_weight", 0.0)),
-            "sharpe": float(obj.get("sharpe_weight", 0.0)),
-            "max_drawdown": float(obj.get("max_drawdown_weight", 0.0)),
+            "total_return": float(getattr(obj, "total_return_weight", 0.0)),
+            "sharpe": float(getattr(obj, "sharpe_weight", 0.0)),
+            "max_drawdown": float(getattr(obj, "max_drawdown_weight", 0.0)),
         }
-        filters = sweep_cfg.get("filters") or {
-            "min_trades": sweep_cfg.get("min_trades"),
-            "max_drawdown": sweep_cfg.get("max_drawdown"),
-            "min_sharpe": sweep_cfg.get("min_sharpe"),
-        }
-        low_trades_penalty = float(sweep_cfg.get("low_trades_penalty", 0.0))
+        filters = getattr(sweep_cfg, "filters", None) if sweep_cfg is not None else None
+        if not isinstance(filters, dict):
+            filters = {
+                "min_trades": getattr(sweep_cfg, "min_trades", None),
+                "max_drawdown": getattr(sweep_cfg, "max_drawdown", None),
+                "min_sharpe": getattr(sweep_cfg, "min_sharpe", None),
+            }
+        low_trades_penalty = float(getattr(sweep_cfg, "low_trades_penalty", 0.0)) if sweep_cfg is not None else 0.0
 
         sym_dir = out_dir / sym
         sym_dir.mkdir(parents=True, exist_ok=True)
         sweep_csv = sym_dir / "sweep.csv"
 
         if mode == "random":
-            n_samples = int(sweep_cfg.get("n_random", 20))
+            n_samples = int(getattr(sweep_cfg, "n_random", 20)) if sweep_cfg is not None else 20
             results = random_search(
                 cfg_path,
                 param_grid,
@@ -387,7 +408,9 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
         if not keys:
             raise ValueError("sweep.params 为空，无法生成可视化/报告")
 
-        value_param = str((sweep_cfg.get("heatmap", {}) or {}).get("value") or "score")
+        heatmap_cfg = getattr(sweep_cfg, "heatmap", None) if sweep_cfg is not None else None
+        heatmap_cfg = heatmap_cfg if isinstance(heatmap_cfg, dict) else {}
+        value_param = str(heatmap_cfg.get("value") or "score")
         if value_param not in header_set:
             # fallback：score 应总是存在
             value_param = "score"
@@ -480,14 +503,17 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
 
         # 用最佳参数跑一次 backtest，生成 trades/equity/report
         best_bt_dir = sym_dir / "best_backtest"
-        cfg_best = deepcopy(cfg_sym)
-        cfg_best.backtest = deepcopy(cfg_best.backtest) if cfg_best.backtest else {}  # type: ignore[assignment]
-        bt_strategy = dict(cfg_best.backtest.get("strategy", {}) or {})  # type: ignore[union-attr]
-        bt_strategy.update(best_params)
-        cfg_best.backtest["strategy"] = bt_strategy  # type: ignore[index]
-        cfg_best.backtest["skip_plots"] = False  # type: ignore[index]
+        cfg_best = cfg_sym.model_copy(deep=True)
+        if not isinstance(cfg_best.backtest, BacktestConfig):
+            raise ValueError("backtest config not found")
+        cfg_best.backtest = cfg_best.backtest.model_copy(deep=True)
+        if cfg_best.backtest.strategy is None:
+            cfg_best.backtest.strategy = cfg_best.strategy.model_copy(deep=True)
+        cfg_best.backtest.strategy = cfg_best.backtest.strategy.model_copy(deep=True)
+        cfg_best.backtest.strategy.params = {**dict(cfg_best.backtest.strategy.params or {}), **dict(best_params)}
+        cfg_best.backtest.skip_plots = False
         bt_summary = BacktestEngine(cfg_obj=cfg_best, artifacts_dir=best_bt_dir).run().summary
-        bt_metrics = canonicalize_metrics(bt_summary.get("metrics", {}) if isinstance(bt_summary, dict) else {})
+        bt_metrics = canonicalize_metrics(bt_summary.metrics.model_dump() if hasattr(bt_summary, "metrics") else {})
 
         all_results[sym] = {
             "sweep_csv": str(sweep_csv),
@@ -511,7 +537,7 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
             "best_backtest": {
                 "dir": str(best_bt_dir),
                 "metrics": bt_metrics,
-                "data_health": bt_summary.get("data_health", {}),  # type: ignore
+                "data_health": bt_summary.data_health.model_dump() if hasattr(bt_summary, "data_health") else {},
             },
             "policy": {"filters": filters, "passed_any": bool(passed)},
         }
@@ -605,12 +631,19 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
     bb = first_sym.get("best_backtest") if isinstance(first_sym, dict) else {}
     metrics = canonicalize_metrics(dict(bb.get("metrics", {}) or {}) if isinstance(bb, dict) else {})
     diagnostics = compute_diagnostics(metrics)
-    policy_cfg = sweep_cfg.get("filters") or {
-        "min_trades": sweep_cfg.get("min_trades"),
-        "max_drawdown": sweep_cfg.get("max_drawdown"),
-        "min_sharpe": sweep_cfg.get("min_sharpe"),
-    }
-    policy = evaluate_policy(metrics, policy_cfg=policy_cfg if isinstance(policy_cfg, dict) else None, stage="research", git_dirty=bool(meta["git"].get("dirty")))
+    policy_cfg = getattr(sweep_cfg, "filters", None) if sweep_cfg is not None else None
+    if not isinstance(policy_cfg, dict):
+        policy_cfg = {
+            "min_trades": getattr(sweep_cfg, "min_trades", None),
+            "max_drawdown": getattr(sweep_cfg, "max_drawdown", None),
+            "min_sharpe": getattr(sweep_cfg, "min_sharpe", None),
+        }
+    policy = evaluate_policy(
+        metrics,
+        policy_cfg=policy_cfg if isinstance(policy_cfg, dict) else None,
+        stage="research",
+        git_dirty=bool(meta["git"].get("dirty")),
+    )
     summary_json = _write_summary_json(
         out_dir,
         task="sweep",
@@ -646,14 +679,16 @@ def run_walkforward_experiment(
 ) -> ExperimentResult:
     logger = setup_logger("experiment")
     cfg = load_config(cfg_path, load_env=False, expand_env=False)
-    bt_cfg = cfg.backtest or {}
+    bt_cfg = cfg.backtest
+    if not isinstance(bt_cfg, BacktestConfig):
+        raise ValueError("backtest config not found")
     run_id = _utc_ts()
     run_ts = _utc_iso()
     meta = {
-        "symbol": bt_cfg.get("symbol", cfg.symbol),
-        "interval": bt_cfg.get("interval", cfg.timeframe),
-        "start": bt_cfg.get("start"),
-        "end": bt_cfg.get("end"),
+        "symbol": bt_cfg.symbol,
+        "interval": bt_cfg.interval,
+        "start": bt_cfg.start,
+        "end": bt_cfg.end,
         "run_id": run_id,
         "run_ts": run_ts,
         "git": _git_info(),

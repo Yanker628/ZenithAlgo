@@ -20,13 +20,15 @@ from shared.models.models import OrderSignal, Tick
 from algo.factors.registry import apply_factors, build_factors
 from algo.risk.manager import RiskManager
 from algo.strategy.registry import build_strategy
-from shared.config.config_loader import load_config, StrategyConfig
+from shared.config.config_loader import BacktestConfig, StrategyConfig, load_config
 from market_data.loader import HistoricalDataLoader
 from shared.utils.logging import setup_logger
 from utils.pnl import compute_unrealized_pnl
 from utils.sizer import resolve_sizing_cfg
 from analysis.metrics.metrics import compute_metrics
+from analysis.metrics.metrics_canon import canonicalize_metrics
 from analysis.visualizations.plotter import plot_drawdown, plot_equity_curve, plot_return_hist
+from research.schemas import BacktestSummary, CanonicalMetrics, DataHealth, PositionSnapshot
 
 
 BASE_CANDLE_COLS = {"ts", "symbol", "open", "high", "low", "close", "volume"}
@@ -45,27 +47,13 @@ def parse_iso(val: str | datetime | date) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
-def build_backtest_summary(broker: BacktestBroker, last_prices: Dict[str, float]) -> dict:
-    """根据 broker 状态生成回测总结。
-
-    Parameters
-    ----------
-    broker:
-        回测 broker。
-    last_prices:
-        每个 symbol 的最后价格。
-
-    Returns
-    -------
-    dict
-        包含 realized/unrealized/cash/positions 等字段。
-    """
+def build_backtest_summary(broker: BacktestBroker, last_prices: Dict[str, float]) -> dict[str, Any]:
     unrealized = compute_unrealized_pnl(broker.positions, last_prices)
     return {
-        "realized_pnl": broker.realized_pnl_all,
-        "final_unrealized": unrealized,
-        "cash": broker.cash,
-        "positions": {s: {"qty": p.qty, "avg_price": p.avg_price} for s, p in broker.positions.items()},
+        "realized_pnl": float(broker.realized_pnl_all),
+        "final_unrealized": float(unrealized),
+        "cash": float(broker.cash),
+        "positions": {s: {"qty": float(p.qty), "avg_price": float(p.avg_price)} for s, p in broker.positions.items()},
     }
 
 
@@ -127,16 +115,19 @@ def _export_trades_csv(trades: list[dict], path: Path) -> None:
     df.to_csv(path, index=False)
 
 
-def _resolve_strategy_param(bt_cfg: dict, cfg, key: str, default: Any = None) -> Any:
-    strat = bt_cfg.get("strategy", {}) if isinstance(bt_cfg, dict) else {}
-    if isinstance(strat, dict) and key in strat and strat.get(key) is not None:
-        return strat.get(key)
+def _resolve_strategy_param(bt_cfg: BacktestConfig, cfg, key: str, default: Any = None) -> Any:
+    if bt_cfg.strategy and isinstance(bt_cfg.strategy.params, dict):
+        v = bt_cfg.strategy.params.get(key)
+        if v is not None:
+            return v
     try:
         params = getattr(cfg, "strategy", None).params  # type: ignore[union-attr]
     except Exception:
         params = {}
-    if isinstance(params, dict) and key in params and params.get(key) is not None:
-        return params.get(key)
+    if isinstance(params, dict):
+        v = params.get(key)
+        if v is not None:
+            return v
     return default
 
 
@@ -195,10 +186,13 @@ class BacktestEngine(BaseEngine):
         bt_cfg = self._load_bt_cfg(cfg)
         logger = setup_logger("backtest")
 
-        record_equity_each_bar = bool(bt_cfg.get("record_equity_each_bar", False))
-        equity_base = float(bt_cfg.get("initial_equity", getattr(cfg, "equity_base", 0) or 0))
+        record_equity_each_bar = bool(bt_cfg.record_equity_each_bar)
+        equity_base = float(bt_cfg.initial_equity or getattr(cfg, "equity_base", 0) or 0)
+        if equity_base <= 0:
+            equity_base = 10000.0
 
-        candles_df, feature_cols, data_health = self._load_candles_and_features(cfg, bt_cfg)
+        candles_df, feature_cols, data_health_raw = self._load_candles_and_features(cfg, bt_cfg)
+        data_health = DataHealth.model_validate(data_health_raw)
 
         strat = self._build_strategy(cfg, bt_cfg)
         risk = self._build_risk(cfg, bt_cfg, equity_base=equity_base)
@@ -273,39 +267,49 @@ class BacktestEngine(BaseEngine):
         )
 
         self.last_prices = last_prices
-        summary = build_backtest_summary(broker, last_prices)
-        summary["metrics"] = compute_metrics(broker.equity_curve, broker.trades)
-        summary["data_health"] = data_health
-        summary["signal_trace"] = signal_trace.to_dict()
+        metrics_raw = compute_metrics(broker.equity_curve, broker.trades)
+        metrics = CanonicalMetrics.model_validate(canonicalize_metrics(metrics_raw))
 
-        artifacts = self._export_artifacts(cfg, bt_cfg, broker=broker, summary=summary)
-        logger.info("Backtest summary: %s", summary)
+        summary_raw = build_backtest_summary(broker, last_prices)
+        summary = BacktestSummary(
+            realized_pnl=float(summary_raw["realized_pnl"]),
+            final_unrealized=float(summary_raw["final_unrealized"]),
+            cash=float(summary_raw["cash"]),
+            positions={
+                s: PositionSnapshot(qty=float(v["qty"]), avg_price=float(v["avg_price"]))
+                for s, v in (summary_raw.get("positions") or {}).items()
+            },
+            metrics=metrics,
+            data_health=data_health,
+            signal_trace=signal_trace.to_dict(),
+        )
+
+        artifacts = self._export_artifacts(cfg, bt_cfg, broker=broker)
+        logger.info("Backtest summary: %s", summary.model_dump())
         return EngineResult(summary=summary, artifacts=artifacts)
 
     def _load_cfg(self):
         return self._cfg_obj or load_config(self._cfg_path, load_env=False, expand_env=False)
 
     @staticmethod
-    def _load_bt_cfg(cfg) -> dict:
+    def _load_bt_cfg(cfg) -> BacktestConfig:
         bt_cfg = getattr(cfg, "backtest", None)
-        if not isinstance(bt_cfg, dict):
+        if not isinstance(bt_cfg, BacktestConfig):
             raise ValueError("backtest config not found")
         return bt_cfg
 
     @staticmethod
-    def _build_strategy(cfg, bt_cfg: dict) -> Any:
-        strat_cfg = bt_cfg.get("strategy", {}) if isinstance(bt_cfg, dict) else {}
-        short_feature = str(strat_cfg.get("short_feature", "ma_short"))
-        long_feature = str(strat_cfg.get("long_feature", "ma_long"))
-
+    def _build_strategy(cfg, bt_cfg: BacktestConfig) -> Any:
         strategy_obj = getattr(cfg, "strategy", None)
-        base_type = strategy_obj.type if strategy_obj else "simple_ma"
-        base_params = dict(strategy_obj.params) if strategy_obj else {}
+        base_type = str(getattr(strategy_obj, "type", None) or "simple_ma")
+        base_params = dict(getattr(strategy_obj, "params", {}) or {})
 
-        bt_strategy_dict = bt_cfg.get("strategy", {}) if isinstance(bt_cfg, dict) else {}
-        bt_type = str(bt_strategy_dict.get("type") or base_type)
-        bt_params = dict(bt_strategy_dict) if isinstance(bt_strategy_dict, dict) else {}
-        bt_params.pop("type", None)
+        bt_strategy = bt_cfg.strategy
+        bt_type = str(getattr(bt_strategy, "type", None) or base_type)
+        bt_params = dict(getattr(bt_strategy, "params", {}) or {})
+
+        short_feature = str(bt_params.get("short_feature", "ma_short"))
+        long_feature = str(bt_params.get("long_feature", "ma_long"))
 
         merged_params = {**base_params, **bt_params}
         merged_params.setdefault("short_feature", short_feature)
@@ -315,42 +319,42 @@ class BacktestEngine(BaseEngine):
         return build_strategy(StrategyConfig(type=bt_type, params=merged_params))
 
     @staticmethod
-    def _build_risk(cfg, bt_cfg: dict, *, equity_base: float) -> RiskManager:
-        suppress_risk_logs = bool(bt_cfg.get("quiet_risk_logs", True)) if isinstance(bt_cfg, dict) else False
+    def _build_risk(cfg, bt_cfg: BacktestConfig, *, equity_base: float) -> RiskManager:
+        suppress_risk_logs = bool(bt_cfg.quiet_risk_logs)
         risk_cfg = deepcopy(cfg.risk)
-        if isinstance(bt_cfg, dict) and "risk" in bt_cfg and isinstance(bt_cfg["risk"], dict):
-            for k, v in bt_cfg["risk"].items():
+        if isinstance(bt_cfg.risk, dict):
+            for k, v in bt_cfg.risk.items():
                 if hasattr(risk_cfg, k):
                     setattr(risk_cfg, k, v)
         return RiskManager(risk_cfg, suppress_warnings=suppress_risk_logs, equity_base=equity_base)
 
     @staticmethod
-    def _build_broker(bt_cfg: dict, *, equity_base: float) -> BacktestBroker:
-        fees = bt_cfg.get("fees", {}) if isinstance(bt_cfg, dict) else {}
+    def _build_broker(bt_cfg: BacktestConfig, *, equity_base: float) -> BacktestBroker:
+        fees = bt_cfg.fees
         return BacktestBroker(
             initial_equity=equity_base,
-            maker_fee=float(fees.get("maker", 0.0)),
-            taker_fee=float(fees.get("taker", 0.0004)),
-            slippage_bp=float(fees.get("slippage_bp", 0.0)),
+            maker_fee=float(fees.maker),
+            taker_fee=float(fees.taker),
+            slippage_bp=float(fees.slippage_bp),
         )
 
     @staticmethod
-    def _load_candles_and_features(cfg, bt_cfg: dict) -> tuple[pd.DataFrame, list[str], dict[str, Any]]:
-        loader = HistoricalDataLoader(bt_cfg["data_dir"])
+    def _load_candles_and_features(cfg, bt_cfg: BacktestConfig) -> tuple[pd.DataFrame, list[str], dict[str, Any]]:
+        loader = HistoricalDataLoader(bt_cfg.data_dir)
         candles = loader.load_klines_for_backtest(
-            symbol=bt_cfg["symbol"],
-            interval=bt_cfg["interval"],
-            start=parse_iso(bt_cfg["start"]),
-            end=parse_iso(bt_cfg["end"]),
-            auto_download=bool(bt_cfg.get("auto_download", False)),
+            symbol=bt_cfg.symbol,
+            interval=bt_cfg.interval,
+            start=parse_iso(bt_cfg.start),
+            end=parse_iso(bt_cfg.end),
+            auto_download=bool(bt_cfg.auto_download),
         )
         candles_df = _candles_to_frame(candles)
 
-        strat_cfg = bt_cfg.get("strategy", {}) if isinstance(bt_cfg, dict) else {}
-        short_feature = str(strat_cfg.get("short_feature", "ma_short"))
-        long_feature = str(strat_cfg.get("long_feature", "ma_long"))
+        bt_params = dict(getattr(bt_cfg.strategy, "params", {}) or {})
+        short_feature = str(bt_params.get("short_feature", "ma_short"))
+        long_feature = str(bt_params.get("long_feature", "ma_long"))
 
-        factors_cfg = bt_cfg.get("factors")
+        factors_cfg = bt_cfg.factors
         if not factors_cfg:
             short_w = int(_resolve_strategy_param(bt_cfg, cfg, "short_window", 0) or 0)
             long_w = int(_resolve_strategy_param(bt_cfg, cfg, "long_window", 0) or 0)
@@ -365,10 +369,10 @@ class BacktestEngine(BaseEngine):
         feature_cols = [c for c in candles_df.columns if c not in BASE_CANDLE_COLS]
         data_health: dict[str, Any] = {
             "n_bars": int(len(candles_df)),
-            "symbol": str(bt_cfg.get("symbol", "")),
-            "interval": str(bt_cfg.get("interval", "")),
-            "start": str(bt_cfg.get("start", "")),
-            "end": str(bt_cfg.get("end", "")),
+            "symbol": str(bt_cfg.symbol),
+            "interval": str(bt_cfg.interval),
+            "start": str(bt_cfg.start),
+            "end": str(bt_cfg.end),
             "n_features": int(len(feature_cols)),
         }
         if feature_cols and not candles_df.empty:
@@ -426,17 +430,17 @@ class BacktestEngine(BaseEngine):
 
     @staticmethod
     def _maybe_flatten_on_end(
-        bt_cfg: dict,
+        bt_cfg: BacktestConfig,
         *,
         broker: BacktestBroker,
         last_prices: dict[str, float],
         last_ts: datetime | None,
     ) -> None:
-        flatten_on_end = bool(bt_cfg.get("flatten_on_end", False)) if isinstance(bt_cfg, dict) else False
+        flatten_on_end = bool(bt_cfg.flatten_on_end)
         if not flatten_on_end or last_ts is None or not last_prices:
             return
 
-        record_equity_each_bar = bool(bt_cfg.get("record_equity_each_bar", False))
+        record_equity_each_bar = bool(bt_cfg.record_equity_each_bar)
         for sym, pos in list(broker.positions.items()):
             if pos.qty == 0:
                 continue
@@ -469,10 +473,9 @@ class BacktestEngine(BaseEngine):
     def _export_artifacts(
         self,
         cfg: Any,
-        bt_cfg: dict,
+        bt_cfg: BacktestConfig,
         *,
         broker: BacktestBroker,
-        summary: dict,
     ) -> dict[str, Any] | None:
         if self._artifacts_dir is None:
             return None
@@ -481,7 +484,7 @@ class BacktestEngine(BaseEngine):
         _export_trades_csv(broker.trades, out_dir / "trades.csv")
         _export_equity_csv(broker.equity_curve, out_dir / "equity.csv")
 
-        skip_plots = bool(bt_cfg.get("skip_plots", False)) if isinstance(bt_cfg, dict) else False
+        skip_plots = bool(bt_cfg.skip_plots)
         if not skip_plots:
             logger = setup_logger("backtest")
             try:

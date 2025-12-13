@@ -18,7 +18,7 @@ from engine.sources.event_source import EventSource
 class EngineResult:
     """引擎运行结果（统一出口）。"""
 
-    summary: dict[str, Any]
+    summary: Any
     artifacts: dict[str, Any] | None = None
 
 
