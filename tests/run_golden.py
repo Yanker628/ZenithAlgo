@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from engine.backtest_runner import run_backtest
-from utils.config_loader import load_config
-from utils.metrics_canon import CANONICAL_METRIC_KEYS
+from engine.backtest_engine import BacktestEngine
+from shared.config.config_loader import load_config
+from analysis.metrics.metrics_canon import CANONICAL_METRIC_KEYS
 
 
 def _load_expected() -> dict:
@@ -26,7 +26,7 @@ def _extract_actual(summary: dict) -> dict:
 def run_golden(tol: float = 1e-6) -> int:
     cfg_path = "config/golden_backtest.yml"
     cfg = load_config(cfg_path, load_env=False, expand_env=False)
-    summary = run_backtest(cfg_obj=cfg, artifacts_dir=None)
+    summary = BacktestEngine(cfg_obj=cfg, artifacts_dir=None).run().summary
     metrics = summary.get("metrics", {}) if isinstance(summary, dict) else {}
     missing = [k for k in CANONICAL_METRIC_KEYS if k not in metrics]
     if missing:

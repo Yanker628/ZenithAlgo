@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
 
-from market.models import OrderSignal, Tick
-from risk.manager import RiskManager
-from strategy.simple_ma import SimpleMAStrategy
-from utils.config_loader import RiskConfig
+from shared.models.models import OrderSignal, Tick
+from algo.risk.manager import RiskManager
+from algo.strategy.simple_ma import SimpleMAStrategy
+from shared.config.config_loader import RiskConfig
 
 
 def test_simple_ma_generates_signals_when_crossing():

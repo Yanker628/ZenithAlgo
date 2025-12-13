@@ -3,8 +3,8 @@ from __future__ import annotations
 import csv
 from datetime import datetime, timedelta, timezone
 
-from utils.config_loader import AppConfig, ExchangeConfig, RiskConfig, StrategyConfig
-from engine.backtest_runner import run_backtest
+from shared.config.config_loader import AppConfig, ExchangeConfig, RiskConfig, StrategyConfig
+from engine.backtest_engine import BacktestEngine
 
 
 def _write_candles_csv(path, *, symbol: str, interval: str, prices: list[float]) -> None:
@@ -52,8 +52,7 @@ def test_run_backtest_exports_trades_and_equity(tmp_path):
     )
 
     out = tmp_path / "artifacts"
-    summary = run_backtest(cfg_obj=cfg, artifacts_dir=out)
+    summary = BacktestEngine(cfg_obj=cfg, artifacts_dir=out).run().summary
     assert (out / "trades.csv").exists()
     assert (out / "equity.csv").exists()
     assert summary["metrics"]["total_trades"] >= 1
-

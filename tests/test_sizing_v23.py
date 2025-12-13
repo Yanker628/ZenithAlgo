@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from broker.backtest import BacktestBroker
-from market.models import OrderSignal, Position
+from broker.backtest_broker import BacktestBroker
+from shared.models.models import OrderSignal, Position
 from utils.sizer import size_signals
 
 

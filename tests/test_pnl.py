@@ -1,4 +1,4 @@
-from market.models import Position
+from shared.models.models import Position
 from utils.pnl import estimate_pnl
 
 

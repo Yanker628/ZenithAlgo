@@ -1,0 +1,17 @@
+{
+  "task": "backtest",
+  "symbol": "BTCUSDT",
+  "interval": "1h",
+  "start": "2021-01-01T00:00:00Z",
+  "end": "2024-01-01T00:00:00Z",
+  "run_ts": "2025-12-13T15:38:08.262417Z",
+  "git": {
+    "sha": "aa2c07658e0a341f0ca5c339bec851d5ed2ba14f",
+    "dirty": true
+  },
+  "config_hash": "96e17badba4644b4067a8eac07e9d1198fc1b3d5383932e208c94c236b0c3944",
+  "data_hash": "e379a1ab05dbe4af1a90ac63ff921b33dadb1229f792650642bf8bf789f0f0bf",
+  "data_hashes": {
+    "dataset/history/BTCUSDT_1h.csv": "488421a0fb217466ff44fce2877ccce47d89045784e66d5c6e2d50aa27887d8a"
+  }
+}

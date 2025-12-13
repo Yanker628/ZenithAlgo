@@ -10,8 +10,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-from engine.backtest_runner import run_backtest
-from utils.config_loader import load_config
+from engine.backtest_engine import BacktestEngine
+from shared.config.config_loader import load_config
 
 
 @dataclass
@@ -95,7 +95,7 @@ def _prepare_output_path(backtest_cfg: dict, output_csv: str | None, prefix: str
     symbol = backtest_cfg.get("symbol", "UNKNOWN")
     interval = backtest_cfg.get("interval", "NA")
     filename = f"{prefix}_{symbol}_{interval}.csv"
-    return Path("data/research") / filename
+    return Path("dataset/research") / filename
 
 
 def _run_single_combo(
@@ -115,8 +115,8 @@ def _run_single_combo(
     bt_cfg["skip_plots"] = True
     cfg.backtest = bt_cfg  # type: ignore[assignment]
 
-    summary_dict = run_backtest(cfg_obj=cfg)
-    metrics = summary_dict.get("metrics", {}) # type: ignore
+    summary_dict = BacktestEngine(cfg_obj=cfg).run().summary
+    metrics = summary_dict.get("metrics", {})
     score = _calc_score(metrics, weights, low_trades_penalty=low_trades_penalty)
     reason = _filter_reason(metrics, filters)
     passed = reason is None

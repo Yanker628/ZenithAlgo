@@ -1,6 +1,6 @@
 """PnL 估算工具。"""
 
-from market.models import Position
+from shared.models.models import Position
 
 
 def estimate_pnl(positions: dict[str, Position], last_prices: dict[str, float]) -> float:

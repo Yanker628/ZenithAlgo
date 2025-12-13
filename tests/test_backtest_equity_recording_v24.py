@@ -3,8 +3,8 @@ from __future__ import annotations
 import csv
 from datetime import datetime, timedelta, timezone
 
-from engine.backtest_runner import run_backtest
-from utils.config_loader import AppConfig, ExchangeConfig, RiskConfig, StrategyConfig
+from engine.backtest_engine import BacktestEngine
+from shared.config.config_loader import AppConfig, ExchangeConfig, RiskConfig, StrategyConfig
 
 
 def _write_candles_csv(path, *, symbol: str, interval: str, prices: list[float]) -> None:
@@ -55,10 +55,9 @@ def test_backtest_record_equity_each_bar_exports_one_point_per_bar(tmp_path):
     )
 
     out = tmp_path / "artifacts"
-    run_backtest(cfg_obj=cfg, artifacts_dir=out)
+    BacktestEngine(cfg_obj=cfg, artifacts_dir=out).run()
 
     equity_csv = out / "equity.csv"
     assert equity_csv.exists()
     rows = list(csv.DictReader(equity_csv.open("r", encoding="utf-8", newline="")))
     assert len(rows) == len(prices)
-

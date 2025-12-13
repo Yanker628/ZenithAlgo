@@ -14,7 +14,7 @@ import argparse
 from dataclasses import dataclass
 from typing import Any
 
-from engine.runner import run_runner
+from engine.trading_engine import TradingEngine
 from research.experiment import run_experiment
 
 
@@ -27,7 +27,7 @@ class CliArgs:
     n_segments: int = 3
     train_ratio: float = 0.7
     min_trades: int = 10
-    output_dir: str = "data/walkforward"
+    output_dir: str = "dataset/walkforward"
     include_live_tests: bool = False
 
 
@@ -40,15 +40,20 @@ def build_parser() -> argparse.ArgumentParser:
         配置好的参数解析器。
     """
     parser = argparse.ArgumentParser(prog="zenithalgo", description="ZenithAlgo 统一入口")
-    parser.add_argument(
-        "--config",
-        default="config/config.yml",
-        help="配置文件路径 (默认: config/config.yml)",
-    )
+    def _add_config_arg(p: argparse.ArgumentParser, *, default: Any) -> None:
+        p.add_argument(
+            "--config",
+            default=default,
+            help="配置文件路径 (默认: config/config.yml)",
+        )
+
+    # 允许 `python main.py --config ... backtest`（全局）与 `python main.py backtest --config ...`（子命令）
+    _add_config_arg(parser, default="config/config.yml")
 
     sub = parser.add_subparsers(dest="task")
 
     p_runner = sub.add_parser("runner", help="实盘/纸面/干跑主循环")
+    _add_config_arg(p_runner, default=argparse.SUPPRESS)
     p_runner.add_argument(
         "--max-ticks",
         type=int,
@@ -56,18 +61,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="跑多少个 tick 后退出（用于 dry-run/测试）",
     )
 
-    sub.add_parser("backtest", help="单次回测")
+    p_backtest = sub.add_parser("backtest", help="单次回测")
+    _add_config_arg(p_backtest, default=argparse.SUPPRESS)
 
     p_sweep = sub.add_parser("sweep", help="参数搜索/批量回测")
+    _add_config_arg(p_sweep, default=argparse.SUPPRESS)
     p_sweep.add_argument("--top-n", type=int, default=5, help="每个品种输出前 N 组")
 
     p_wf = sub.add_parser("walkforward", help="Walk-Forward 验证")
+    _add_config_arg(p_wf, default=argparse.SUPPRESS)
     p_wf.add_argument("--n-segments", type=int, default=3)
     p_wf.add_argument("--train-ratio", type=float, default=0.7)
     p_wf.add_argument("--min-trades", type=int, default=10)
-    p_wf.add_argument("--output-dir", type=str, default="data/walkforward")
+    p_wf.add_argument("--output-dir", type=str, default="dataset/walkforward")
 
     p_test = sub.add_parser("test", help="运行 pytest（默认跳过 live）")
+    _add_config_arg(p_test, default=argparse.SUPPRESS)
     p_test.add_argument(
         "--include-live",
         action="store_true",
@@ -93,15 +102,16 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
     parser = build_parser()
     ns = parser.parse_args(argv)
     task = ns.task or "runner"
+    config = getattr(ns, "config", "config/config.yml")
     return CliArgs(
-        config=str(ns.config),
+        config=str(config),
         task=task,
         max_ticks=getattr(ns, "max_ticks", None),
         top_n=int(getattr(ns, "top_n", 5)),
         n_segments=int(getattr(ns, "n_segments", 3)),
         train_ratio=float(getattr(ns, "train_ratio", 0.7)),
         min_trades=int(getattr(ns, "min_trades", 10)),
-        output_dir=str(getattr(ns, "output_dir", "data/walkforward")),
+        output_dir=str(getattr(ns, "output_dir", "dataset/walkforward")),
         include_live_tests=bool(getattr(ns, "include_live", False)),
     )
 
@@ -122,7 +132,7 @@ def main(argv: list[str] | None = None) -> Any:
     args = parse_args(argv)
 
     if args.task == "runner":
-        return run_runner(cfg_path=args.config, max_ticks=args.max_ticks)
+        return TradingEngine(cfg_path=args.config, max_ticks=args.max_ticks).run().summary
     if args.task == "backtest":
         return run_experiment(args.config, task="backtest")
     if args.task == "sweep":

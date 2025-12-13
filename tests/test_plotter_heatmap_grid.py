@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from utils.plotter import _prepare_heatmap_pivot
+from analysis.visualizations.plotter import _prepare_heatmap_pivot
 
 
 def _write_sweep_csv(path: Path) -> None:

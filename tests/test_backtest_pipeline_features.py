@@ -4,9 +4,9 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
-from factors.registry import apply_factors, build_factors
-from market.models import Tick
-from strategy.simple_ma import SimpleMAStrategy
+from algo.factors.registry import apply_factors, build_factors
+from shared.models.models import Tick
+from algo.strategy.simple_ma import SimpleMAStrategy
 
 
 def test_backtest_pipeline_injects_feature_cols_into_tick_features():

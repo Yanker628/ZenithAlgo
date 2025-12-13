@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from market.models import Tick
-from strategy.trend_filter import TrendFilteredStrategy
+from shared.models.models import Tick
+from algo.strategy.trend_filter import TrendFilteredStrategy
 
 
 def _tick(price: float, *, short_ma: float | None, long_ma: float | None, atr: float | None = None) -> Tick:
@@ -57,4 +57,3 @@ def test_trend_filtered_exit_on_death_cross_when_no_atr():
     assert len(sigs) == 1
     assert sigs[0].side == "sell"
     assert sigs[0].reason == "ma_death_cross"
-

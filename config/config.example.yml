@@ -22,13 +22,13 @@ sizing:
   trade_notional: 200
 
 backtest:
-  data_dir: "data/history"
+  data_dir: "dataset/history"
   symbol: "BTCUSDT"
   interval: "1h"
   start: "2024-01-01T00:00:00Z"
   end: "2024-02-01T00:00:00Z"
   initial_equity: 1000
-  auto_download: false
+  auto_download: false # 若 data_dir 下无 CSV，可改为 true 自动下载补齐
   quiet_risk_logs: true
   skip_plots: false
   # 权益曲线记录口径：

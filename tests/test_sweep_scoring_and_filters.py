@@ -4,7 +4,7 @@ import csv
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from utils.config_loader import AppConfig, ExchangeConfig, RiskConfig, StrategyConfig
+from shared.config.config_loader import AppConfig, ExchangeConfig, RiskConfig, StrategyConfig
 from utils.param_search import grid_search
 
 

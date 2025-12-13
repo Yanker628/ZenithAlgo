@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from market.models import OrderSignal
-from risk.manager import RiskManager
-from utils.config_loader import RiskConfig
+from shared.models.models import OrderSignal
+from algo.risk.manager import RiskManager
+from shared.config.config_loader import RiskConfig
 
 
 def test_risk_manager_not_mutate_input_signal_when_clipping_pct_fallback():
@@ -33,4 +33,3 @@ def test_risk_manager_daily_block_and_reset():
     assert risk.filter_signals([sig]) == []
     risk.reset_daily_state(log=False)
     assert risk.filter_signals([sig])
-

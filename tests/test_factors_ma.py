@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from factors.ma import MAFactor
+from algo.factors.ma import MAFactor
 
 
 def test_ma_factor_window_and_nan_convention():

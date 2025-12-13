@@ -29,34 +29,47 @@ ZenithAlgo 是一个基于 Python 的事件驱动量化交易系统，专为加�
 
 ```
 ZenithAlgo/
+├── documents/           # 文档库（架构/流程/实践）
 ├── engine/              # 交易引擎
-│   ├── runner.py        # 实时交易主循环
-│   ├── backtest_runner.py    # 单次回测引擎
-│   ├── batch_backtest.py     # 批量回测/参数搜索
-│   └── walkforward.py        # Walk-Forward 验证
-├── factors/             # 因子/特征库
-│   ├── base.py
-│   ├── registry.py
-│   ├── ma.py
-│   ├── rsi.py
-│   └── atr.py
-├── strategy/            # 策略模块
-│   ├── base.py          # 策略基类
-│   └── simple_ma.py     # 简单均线策略示例
-├── sizing/              # 仓位/下单量
-│   ├── base.py
-│   ├── fixed_notional.py
-│   └── pct_equity.py
-├── risk/                # 风险管理
-│   └── manager.py       # 风控管理器
+│   ├── base_engine.py        # 引擎基类（模板模式）
+│   ├── trading_engine.py     # 实盘/纸面/干跑引擎
+│   ├── backtest_engine.py    # 单次回测引擎
+│   ├── optimization_engine.py # 参数优化/批量回测（研究入口）
+│   ├── walkforward_engine.py # Walk-Forward 引擎
+│   └── signal_pipeline.py    # 策略→sizing→风控→执行管线
+├── algo/                # 核心算法模块
+│   ├── factors/         # 因子/特征库
+│   │   ├── base.py
+│   │   ├── registry.py
+│   │   ├── ma.py
+│   │   ├── rsi.py
+│   │   └── atr.py
+│   ├── strategy/        # 策略模块
+│   │   ├── base.py          # 策略基类
+│   │   └── simple_ma.py     # 简单均线策略示例
+│   ├── sizing/          # 仓位/下单量
+│   │   ├── base.py
+│   │   ├── fixed_notional.py
+│   │   └── pct_equity.py
+│   └── risk/            # 风险管理
+│       └── manager.py       # 风控管理器
 ├── broker/              # 交易接口
-│   ├── base.py          # Broker 抽象类
-│   ├── mock.py          # 模拟交易
-│   ├── binance.py       # Binance 交易所接口
-│   └── backtest.py      # 回测专用 Broker
-├── market/              # 行情数据
+│   ├── abstract_broker.py    # 抽象 Broker + 运行模式
+│   ├── backtest_broker.py    # 回测 Broker（撮合/手续费/滑点）
+│   ├── paper_broker.py       # dry-run / paper（本地记账）
+│   ├── live_broker.py        # live-*（真实下单）
+│   ├── order_manager.py      # 订单管理器（预留）
+│   ├── execution/            # 执行模型（滑点/撮合等）
+│   └── accounts/             # 账户模型（预留）
+├── market_data/         # 行情数据
 │   ├── client.py        # 行情客户端（实时/模拟）
 │   └── models.py        # 数据模型
+├── prompts/             # 提示词资产（预留）
+├── libs/                # 核心实现骨架（预留）
+├── common/              # 通用模型（预留）
+├── database/            # 存储适配（预留）
+├── external/            # 外部依赖登记（预留）
+├── backups/             # 备份脚本（预留）
 ├── utils/               # 工具模块
 │   ├── config_loader.py # 配置加载
 │   ├── data_loader.py   # 历史数据加载
@@ -123,40 +136,34 @@ cp config/config.example.yml config/config.yml
 
 ### 运行示例
 
-推荐统一入口 `main.py`（旧的 `python -m engine.*` 仍兼容）。
+唯一入口：`main.py`（开发阶段避免入口分裂）。
 
 **实时交易（Paper Trading / Dry-run / Live）**
 
 ```bash
-python main.py runner --config config/config.yml
+python3 main.py runner --config config/config.yml
 # 不写子命令时默认 runner:
-python main.py --config config/config.yml
+python3 main.py --config config/config.yml
 # dry-run/测试想跑有限 tick:
-python main.py runner --max-ticks 200
+python3 main.py runner --max-ticks 200
 ```
 
 **单次回测**
 
 ```bash
-python main.py backtest --config config/config.yml
-```
-
-兼容旧入口（模块方式），并支持指定产物目录：
-
-```bash
-uv run python -m engine.backtest_runner --cfg config/config.yml --artifacts-dir data/experiments/_bt_oneoff
+python3 main.py backtest --config config/config.yml
 ```
 
 **参数网格搜索**
 
 ```bash
-python main.py sweep --config config/config.yml
+python3 main.py sweep --config config/config.yml
 ```
 
 **Walk-Forward 验证**
 
 ```bash
-python main.py walkforward --config config/config.yml
+python3 main.py walkforward --config config/config.yml
 ```
 
 V2.3 起，`backtest/sweep/walkforward` 会把实验产物统一落盘到 `data/experiments/`（含 `results.json`、`report.md`、配置快照，以及回测的 `trades.csv/equity.csv` 等）。
@@ -168,10 +175,18 @@ V2.3 起，`backtest/sweep/walkforward` 会把实验产物统一落盘到 `data/
 - `meta.json`：实验元信息（含 `config_hash/data_hash/git.dirty`）
 - `summary.json`：标准化总结（`metrics/diagnostics/policy/artifacts`）
 
-Golden Backtest（最小可信回测）：
+运行测试（默认跳过 live）：
 
 ```bash
-python -m tests.run_golden
+python3 main.py test
+```
+
+## 🧰 开发命令
+
+```bash
+make help
+make test
+make lint  # 需要 npm install -g markdownlint-cli
 ```
 
 ## 📚 使用指南
@@ -247,7 +262,8 @@ sizing:
 
 ```yaml
 backtest:
-  data_dir: "data/history"
+  data_dir: "dataset/history"
+  # 仓库默认不提交历史 CSV：请自行放入 `{symbol}_{interval}.csv`，或开启 auto_download 自动补齐
   symbol: "BTCUSDT"
   interval: "1h"
   start: "2021-01-01T00:00:00Z"
@@ -287,8 +303,8 @@ backtest:
 实现自定义策略只需继承 `Strategy` 基类：
 
 ```python
-from strategy.base import Strategy
-from market.models import Tick, OrderSignal
+from algo.strategy.base import Strategy
+from shared.models.models import Tick, OrderSignal
 
 class MyStrategy(Strategy):
     def on_tick(self, tick: Tick) -> list[OrderSignal]:
@@ -332,7 +348,7 @@ python -m utils.best_params \
 **可视化**
 
 ```python
-from utils.plotter import plot_equity_curve, plot_drawdown
+from analysis.visualizations.plotter import plot_equity_curve, plot_drawdown
 # 自动生成图表到 plots/ 目录
 ```
 
@@ -392,9 +408,8 @@ LIVE_TESTS=1 pytest -m live
 
 ### 提交规范
 
-- 提交信息使用中文，简洁明了
-- 格式：`类型: 简短描述`
-- 类型：`feat`（新功能）、`fix`（修复）、`docs`（文档）、`test`（测试）
+- 建议遵循简化 Conventional Commits：`feat|fix|docs|test|chore|refactor: scope – summary`
+- summary 可用中文或英文，但要能一眼看懂“改了什么/影响范围”
 
 ### 项目结构
 
@@ -404,7 +419,7 @@ LIVE_TESTS=1 pytest -m live
 - **strategy/**：策略模块，实现交易逻辑
 - **risk/**：风险管理，过滤和限制交易信号
 - **broker/**：交易接口，封装交易所 API
-- **market/**：行情数据，提供实时和历史数据
+- **market_data/**：行情数据，提供实时和历史数据
 - **utils/**：工具函数，配置、日志、指标计算等
 
 ## 📝 更新日志

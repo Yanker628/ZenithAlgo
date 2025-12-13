@@ -1,6 +1,6 @@
 """实验可复现入口（V2.3）。
 
-统一把一次 backtest / sweep / walkforward 的产物落盘到 data/experiments/ 下：
+统一把一次 backtest / sweep / walkforward 的产物落盘到 results/ 下：
 - results.json
 - config.yml（配置快照）
 - report.md
@@ -9,30 +9,28 @@
 
 from __future__ import annotations
 
-import argparse
 import csv
 import json
 import shutil
 import subprocess
-import sys
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from engine.backtest_runner import run_backtest
-from engine.walkforward import walk_forward
-from utils.diagnostics import compute_diagnostics
+from engine.backtest_engine import BacktestEngine
+from engine.walkforward_engine import WalkforwardEngine
+from analysis.metrics.diagnostics import compute_diagnostics
 from utils.hashing import sha256_files, sha256_text
 from utils.json_sanitize import sanitize_for_json
-from utils.metrics_canon import canonicalize_metrics, validate_metrics_schema
+from analysis.metrics.metrics_canon import canonicalize_metrics, validate_metrics_schema
 from utils.policy import evaluate_policy
-from utils.config_loader import load_config
-from utils.logging import setup_logger
+from shared.config.config_loader import load_config
+from shared.utils.logging import setup_logger
 from utils.param_search import grid_search, random_search
-from utils.plotter import plot_param_1d, plot_param_importance, plot_sweep_heatmaps
-from research.report import write_report_md, write_summary_md
+from analysis.visualizations.plotter import plot_param_1d, plot_param_importance, plot_sweep_heatmaps
+from analysis.reports.report import write_report_md, write_summary_md
 
 
 def _utc_ts() -> str:
@@ -70,7 +68,7 @@ def _config_hash(cfg_path: str) -> str:
 
 def _data_hashes(cfg_obj, *, symbols: list[str]) -> tuple[str, dict[str, str]]:
     bt_cfg = getattr(cfg_obj, "backtest", None) or {}
-    data_dir = str(bt_cfg.get("data_dir", "data/history"))
+    data_dir = str(bt_cfg.get("data_dir", "dataset/history"))
     interval = str(bt_cfg.get("interval", getattr(cfg_obj, "timeframe", "")))
     paths = [Path(data_dir) / f"{s}_{interval}.csv" for s in symbols]
     return sha256_files(paths)
@@ -217,7 +215,7 @@ def _experiment_dir(task: str, meta: dict[str, Any]) -> Path:
     start = str(meta.get("start") or "NA")
     end = str(meta.get("end") or "NA")
     run_id = str(meta.get("run_id") or meta.get("run_ts") or _utc_ts())
-    return Path("data/experiments") / task / symbol / interval / f"{start}_{end}" / run_id
+    return Path("results") / task / symbol / interval / f"{start}_{end}" / run_id
 
 
 @dataclass(frozen=True)
@@ -245,7 +243,7 @@ def run_backtest_experiment(cfg_path: str) -> ExperimentResult:
     }
     out_dir = _experiment_dir("backtest", meta)
     _ensure_config_snapshot(cfg_path, out_dir)
-    summary = run_backtest(cfg_obj=cfg, artifacts_dir=out_dir)
+    summary = BacktestEngine(cfg_obj=cfg, artifacts_dir=out_dir).run().summary
     metrics = canonicalize_metrics(summary.get("metrics", {}) if isinstance(summary, dict) else {})
     artifacts = {
         "dir": str(out_dir),
@@ -468,7 +466,7 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
         bt_strategy.update(best_params)
         cfg_best.backtest["strategy"] = bt_strategy  # type: ignore[index]
         cfg_best.backtest["skip_plots"] = False  # type: ignore[index]
-        bt_summary = run_backtest(cfg_obj=cfg_best, artifacts_dir=best_bt_dir)
+        bt_summary = BacktestEngine(cfg_obj=cfg_best, artifacts_dir=best_bt_dir).run().summary
         bt_metrics = canonicalize_metrics(bt_summary.get("metrics", {}) if isinstance(bt_summary, dict) else {})
 
         all_results[sym] = {
@@ -637,14 +635,14 @@ def run_walkforward_experiment(
     _ensure_config_snapshot(cfg_path, out_dir)
     logger.info("Walkforward experiment dir: %s", out_dir)
 
-    res = walk_forward(
+    res = WalkforwardEngine(
         cfg_path=cfg_path,
         n_segments=n_segments,
         train_ratio=train_ratio,
         min_trades=min_trades,
         output_dir=str(out_dir / "segments"),
         artifacts_base_dir=str(out_dir / "segments"),
-    )
+    ).run().summary
     cfg_hash = _config_hash(cfg_path)
     data_hash, data_hashes = _data_hashes(cfg, symbols=[str(meta["symbol"])])
     meta_json = _write_meta_json(
@@ -731,62 +729,7 @@ def run_experiment(cfg_path: str, task: str, **kwargs) -> ExperimentResult:
     raise ValueError(f"Unknown experiment task: {task}")
 
 
-def _build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="python -m research.experiment", description="实验入口：backtest / sweep / walkforward")
-    p.add_argument("--task", required=True, choices=["backtest", "sweep", "walkforward"], help="实验类型")
-    p.add_argument("--cfg", required=True, help="配置文件路径，如 config/config.yml")
-    p.add_argument("--top-n", "--top_n", dest="top_n", type=int, default=5, help="sweep: 取 top N 组合（默认 5）")
-    p.add_argument(
-        "--n-segments",
-        "--n_segments",
-        dest="n_segments",
-        type=int,
-        default=3,
-        help="walkforward: 分段数（默认 3）",
-    )
-    p.add_argument(
-        "--train-ratio",
-        "--train_ratio",
-        dest="train_ratio",
-        type=float,
-        default=0.7,
-        help="walkforward: 训练集占比（默认 0.7）",
-    )
-    p.add_argument(
-        "--min-trades",
-        "--min_trades",
-        dest="min_trades",
-        type=int,
-        default=10,
-        help="walkforward: 最小交易次数（默认 10）",
-    )
-    return p
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = _build_arg_parser().parse_args(argv)
-    cfg_path = str(args.cfg)
-    if not Path(cfg_path).exists():
-        raise SystemExit(f"Config file not found: {cfg_path}")
-
-    res = run_experiment(
-        cfg_path=cfg_path,
-        task=str(args.task),
-        top_n=int(args.top_n),
-        n_segments=int(args.n_segments),
-        train_ratio=float(args.train_ratio),
-        min_trades=int(args.min_trades),
-    )
-    # 给 IDE/CI 一个稳定“验收点”输出：实验目录
-    out_dir = None
-    if res.artifacts and isinstance(res.artifacts, dict):
-        out_dir = res.artifacts.get("dir")
-    if out_dir:
-        print(out_dir)
-    else:
-        print(json.dumps(asdict(res), ensure_ascii=False))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+"""
+注意：该模块不再提供命令行入口。
+CLI 统一由仓库根目录 `main.py` 承担（开发阶段避免入口分裂）。
+"""

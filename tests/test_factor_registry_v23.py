@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from factors.registry import apply_factors, build_factors
+from algo.factors.registry import apply_factors, build_factors
 
 
 def test_build_factors_accepts_flat_params():

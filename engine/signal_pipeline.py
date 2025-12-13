@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from broker.base import Broker
-from market.models import OrderSignal, Tick
-from risk.manager import RiskManager
-from strategy.base import Strategy
+from broker.abstract_broker import Broker
+from shared.models.models import OrderSignal, Tick
+from algo.risk.manager import RiskManager
+from algo.strategy.base import Strategy
 from utils.sizer import size_signals
 
 
@@ -56,4 +56,3 @@ def execute_signals(
     for sig in signals:
         results.append(broker.execute(sig, **kwargs))
     return results
-

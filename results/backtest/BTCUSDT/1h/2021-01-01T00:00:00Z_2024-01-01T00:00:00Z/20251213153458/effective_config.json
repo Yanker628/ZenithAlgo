@@ -1,0 +1,85 @@
+{
+  "mode": "paper",
+  "symbol": "BTCUSDT",
+  "timeframe": "1h",
+  "equity_base": 1000.0,
+  "strategy": {
+    "type": "trend_filtered",
+    "params": {
+      "short_window": 10,
+      "long_window": 120,
+      "slope_threshold": 0.05,
+      "atr_period": 14,
+      "atr_stop_multiplier": 2.0
+    }
+  },
+  "sizing": null,
+  "backtest": {
+    "data_dir": "data/history",
+    "symbol": "BTCUSDT",
+    "interval": "1h",
+    "start": "2021-01-01T00:00:00Z",
+    "end": "2024-01-01T00:00:00Z",
+    "initial_equity": 1000,
+    "auto_download": true,
+    "quiet_risk_logs": true,
+    "flatten_on_end": true,
+    "fees": {
+      "maker": 0.0002,
+      "taker": 0.0004,
+      "slippage_bp": 1.0
+    },
+    "sizing": {
+      "position_pct": 0.2,
+      "trade_notional": 200
+    },
+    "strategy": {
+      "type": "trend_filtered"
+    },
+    "sweep": {
+      "enabled": true,
+      "mode": "grid",
+      "min_trades": 15,
+      "max_drawdown": 0.3,
+      "min_sharpe": 0.0,
+      "low_trades_penalty": 2.0,
+      "params": {
+        "long_window": [
+          60,
+          90,
+          120
+        ],
+        "slope_threshold": [
+          0.05,
+          0.1,
+          0.2
+        ]
+      },
+      "objective": {
+        "total_return_weight": 0.3,
+        "sharpe_weight": 0.5,
+        "max_drawdown_weight": 0.2
+      }
+    }
+  },
+  "risk": {
+    "max_position_pct": 0.3,
+    "max_daily_loss_pct": 1
+  },
+  "exchange": {
+    "name": "binance",
+    "base_url": "https://api.binance.com",
+    "api_key": "${BINANCE_API_KEY}",
+    "api_secret": "${BINANCE_API_SECRET}",
+    "ws_url": "wss://stream.binance.com:9443/ws",
+    "allow_live": false,
+    "symbols_allowlist": [
+      "BTCUSDT"
+    ],
+    "min_notional": 5,
+    "min_qty": 0.001,
+    "qty_step": 0.0001,
+    "price_step": 0.01,
+    "max_price_deviation_pct": null
+  }
+}

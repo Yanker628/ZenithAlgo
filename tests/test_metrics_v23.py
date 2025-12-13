@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from utils.metrics import compute_metrics
+from analysis.metrics.metrics import compute_metrics
 
 
 def test_metrics_include_v23_fields_and_drawdown_positive():

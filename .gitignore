@@ -19,12 +19,13 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.mypy_cache/
+.ruff_cache/
 
 # ============================================
 # 包管理工具
 # ============================================
 .uv/
-uv.lock
 pip-log.txt
 pip-delete-this-directory.txt
 
@@ -64,6 +65,11 @@ plots/
 *.png
 *.jpg
 *.jpeg
+
+# ============================================
+# Node / Markdown 工具（可选）
+# ============================================
+node_modules/
 
 # ============================================
 # 临时文件
@@ -130,10 +136,9 @@ secrets/
 credentials/
 
 # ============================================
-# 项目文档（可选，根据需求）
+# 项目文档（可提交）
 # ============================================
-# ROADMAP.md
-# AGENTS.md
+# documents/
 
 # ============================================
 # Jupyter Notebook
@@ -142,15 +147,21 @@ credentials/
 *.ipynb
 
 # ============================================
+# 备份输出（脚本产物）
+# ============================================
+backups/_out/
+backups/output/
+backups/*.zip
+backups/*.tar.gz
+
+# ============================================
 # 其他
 # ============================================
 .python_version
-.mypy_cache/
 .dmypy.json
 dmypy.json
 .pyre/
 .pytype/
 cython_debug/
-AGENTS.md
 .env.local
-AGENTS.md
+dataset/

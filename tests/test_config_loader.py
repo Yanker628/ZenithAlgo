@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from utils.config_loader import AppConfig, load_config
+from shared.config.config_loader import AppConfig, load_config
 
 
 def test_load_config_expands_env_and_returns_appconfig(monkeypatch: pytest.MonkeyPatch):

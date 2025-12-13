@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from broker.base import Broker
-from market.models import OrderSignal
-from sizing.base import build_sizer
+from broker.abstract_broker import Broker
+from shared.models.models import OrderSignal
+from algo.sizing.base import build_sizer
 
 
 def resolve_sizing_cfg(cfg) -> dict[str, Any]:

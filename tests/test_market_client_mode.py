@@ -1,4 +1,4 @@
-from market.client import get_market_client, BinanceMarketClient, FakeMarketClient
+from data.client import get_market_client, BinanceMarketClient, FakeMarketClient
 
 
 def test_get_market_client_respects_mode():

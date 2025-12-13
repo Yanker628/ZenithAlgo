@@ -4,9 +4,9 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
-from factors.atr import ATRFactor
-from factors.ma import MAFactor
-from factors.rsi import RSIFactor
+from algo.factors.atr import ATRFactor
+from algo.factors.ma import MAFactor
+from algo.factors.rsi import RSIFactor
 
 
 def _df(prices: list[float]) -> pd.DataFrame:

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from broker.backtest import BacktestBroker
-from market.models import OrderSignal
+from broker.backtest_broker import BacktestBroker
+from shared.models.models import OrderSignal
 
 
 def test_backtest_broker_buy_fee_in_cost_and_cash():
@@ -56,4 +56,3 @@ def test_backtest_broker_slippage_direction_correct():
     assert abs(res_buy["slippage_price"] - 101.0) < 1e-9
     res_sell = broker.execute(OrderSignal(symbol="BTCUSDT", side="sell", qty=1.0, reason="t"), tick_price=100.0, ts=ts)
     assert abs(res_sell["slippage_price"] - 99.0) < 1e-9
-
