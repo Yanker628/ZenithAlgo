@@ -51,6 +51,7 @@ class SimpleMAStrategy(Strategy):
         long_ma: float | None = None
 
         if tick.features and self.short_feature in tick.features and self.long_feature in tick.features:
+            # 1. 优先使用外部计算好的特征 (features)
             short_ma = float(tick.features[self.short_feature])
             long_ma = float(tick.features[self.long_feature])
             if math.isnan(short_ma) or math.isnan(long_ma):
@@ -58,6 +59,8 @@ class SimpleMAStrategy(Strategy):
         else:
             if self.require_features:
                 return []
+            
+            # 2. 如果没有特征，则在内存中维护价格队列实时计算
             self.prices.append(tick.price)
             if len(self.prices) < self.long_window:
                 return []
@@ -81,10 +84,12 @@ class SimpleMAStrategy(Strategy):
         signals: list[OrderSignal] = []
 
         if short_ma > long_ma and self.last_signal != "long":
+            # 金叉：短周期上穿长周期 -> 买入
             signals.append(OrderSignal(symbol=tick.symbol, side="buy", qty=0.0, reason="ma_cross_up"))
             self.last_signal = "long"
             self.last_trade_ts = now
         elif short_ma < long_ma and self.last_signal != "short":
+            # 死叉：短周期下穿长周期 -> 卖出
             signals.append(OrderSignal(symbol=tick.symbol, side="sell", qty=0.0, reason="ma_cross_down"))
             self.last_signal = "short"
             self.last_trade_ts = now

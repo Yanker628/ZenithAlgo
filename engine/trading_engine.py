@@ -42,23 +42,39 @@ class TradingEngine(BaseEngine):
         self.last_prices: dict[str, float] = {}
 
     def run(self) -> EngineResult:
+        """启动交易引擎。
+        
+        执行流程：
+        1. 加载配置 (config)。
+        2. 初始化组件：Broker (交易执行), RiskManager (风控), Strategy (策略)。
+        3. 启动对账 (Live 模式下)。
+        4. 初始化行情连接 (MarketClient)。
+        5. 预热数据 (Warmup)。
+        6. 进入主循环 (_run_loop)。
+        """
         logger = setup_logger("engine")
         cfg = self._load_cfg()
         self.cfg = cfg
 
+        # 初始资金，默认为 10000
         equity_base = float(getattr(cfg, "equity_base", 0) or 0) or 10000.0
+        
+        # 构建策略与风控
         strat = build_strategy(getattr(cfg, "strategy", None))
         risk = RiskManager(cfg.risk, equity_base=equity_base)
 
         trade_logger = TradeLogger()
         broker = self._build_broker(cfg, trade_logger=trade_logger)
         self.broker = broker
+        
+        # 如果是实盘且开启恢复，先进行对账
         self._maybe_startup_reconcile(cfg=cfg, broker=broker, logger=logger)
 
         market_client = self._build_market_client(cfg, logger=logger)
         sizing_cfg = resolve_sizing_cfg(cfg)
         self._maybe_warmup_price(cfg, market_client=market_client, logger=logger)
 
+        # 进入事件驱动主循环
         self._run_loop(
             cfg=cfg,
             broker=broker,
@@ -196,6 +212,15 @@ class TradingEngine(BaseEngine):
         log_interval_secs = 5
 
         def _on_tick(tick) -> None:
+            """Tick 事件回调函数。
+            
+            每收到一个行情 tick，执行一次：
+            1. 更新最新价格。
+            2. 检查由是否跨日 (rolling day)。
+            3. 策略计算信号 (prepare_signals)。
+            4. 执行信号 (broker.execute)。
+            5. 定期更新和打印 PnL (盈亏)。
+            """
             nonlocal current_trading_day, last_pnl_log_ts
             self.last_prices[tick.symbol] = tick.price
 
@@ -208,6 +233,7 @@ class TradingEngine(BaseEngine):
                 logger=logger,
             )
 
+            # 调用 pipeline 生成过滤后的交易信号
             filtered_signals = prepare_signals(
                 tick=tick,
                 strategy=strat,
@@ -219,10 +245,12 @@ class TradingEngine(BaseEngine):
                 logger=logger,
             )
 
+            # 执行所有通过风控的信号
             for sig in filtered_signals:
                 res = broker.execute(sig)
                 logger.info("Order result: %s", res)
 
+            # 更新 PnL 并按需打印日志
             last_pnl_log_ts = self._log_and_update_pnl(
                 broker=broker,
                 risk=risk,

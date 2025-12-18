@@ -20,13 +20,19 @@ from research.experiment import run_experiment
 
 @dataclass
 class CliArgs:
+    """定义命令行参数结构。
+    
+    这里列出了所有支持的命令行选项，每个字段对应一个 argparse 参数。
+    config: 配置文件路径
+    task: 要运行的任务类型 (runner/backtest/sweep/walkforward)
+    """
     config: str
     task: str
-    max_ticks: int | None = None
-    top_n: int = 5
-    n_segments: int = 3
-    train_ratio: float = 0.7
-    min_trades: int = 10
+    max_ticks: int | None = None  # 仅用于 debug，限制运行多少个 tick 就停止
+    top_n: int = 5                # sweep 模式下保留前且多少组参数
+    n_segments: int = 3           # walkforward 模式下的分段数
+    train_ratio: float = 0.7      # walkforward 模式下的训练集占比
+    min_trades: int = 10          # 最小交易次数限制
     output_dir: str = "results/walkforward_engine"
     include_live_tests: bool = False
 
@@ -131,12 +137,21 @@ def main(argv: list[str] | None = None) -> Any:
     """
     args = parse_args(argv)
 
+    # 根据 task 参数分发到不同的执行逻辑
+    # 1. runner: 核心交易循环 (实盘/模拟盘/回测 dry-run)
     if args.task == "runner":
+        # 初始化交易引擎并运行
         return TradingEngine(cfg_path=args.config, max_ticks=args.max_ticks).run().summary
+    
+    # 2. backtest: 历史数据回测
     if args.task == "backtest":
         return run_experiment(args.config, task="backtest")
+    
+    # 3. sweep: 超参数搜索
     if args.task == "sweep":
         return run_experiment(args.config, task="sweep", top_n=args.top_n)
+    
+    # 4. walkforward: 滚动窗口验证
     if args.task == "walkforward":
         return run_experiment(
             args.config,
@@ -145,6 +160,8 @@ def main(argv: list[str] | None = None) -> Any:
             train_ratio=args.train_ratio,
             min_trades=args.min_trades,
         )
+    
+    # 5. test: 运行单元测试
     if args.task == "test":
         import pytest
 
