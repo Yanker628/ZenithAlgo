@@ -262,14 +262,21 @@ fn simulate_trades(
     lows: Vec<f64>,
     closes: Vec<f64>,
     signals: Vec<i32>,
-    sl_pct: f64,
-    tp_pct: f64,
+    sl_val: f64,    // Fixed Pct (e.g. 0.05) OR Multiplier (e.g. 2.0)
+    tp_val: f64,
     allow_short: bool,
+    use_atr: bool,
+    atr: Vec<f64>,
 ) -> PyResult<(Vec<(i64, f64)>, Vec<(i64, i64, f64, f64, f64, String)>)> {
     let n = timestamps.len();
     if opens.len() != n || highs.len() != n || lows.len() != n || closes.len() != n || signals.len() != n {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "All input arrays must have the same length",
+        ));
+    }
+    if use_atr && atr.len() != n {
+         return Err(pyo3::exceptions::PyValueError::new_err(
+            "ATR array length must match other arrays",
         ));
     }
 
@@ -279,8 +286,9 @@ fn simulate_trades(
     // 状态变量
     let mut position_size = 0.0; // 1.0 = Long, -1.0 = Short, 0.0 = Flat
     let mut entry_price = 0.0;
+    let mut entry_atr = 0.0; // ATR at entry
     let mut entry_ts = 0;
-    let mut cash = 10000.0; // 初始资金，用于计算 equity 曲线趋势（相对值）
+    let mut cash = 10000.0; 
     
     for i in 0..n {
         let ts = timestamps[i];
@@ -289,46 +297,56 @@ fn simulate_trades(
         let lo = lows[i];
         let cl = closes[i];
         let sig = signals[i];
+        let current_atr = if use_atr { atr[i] } else { 0.0 };
 
-        // 1. 检查当前持仓是否触发 SL/TP (Intra-bar check)
-        // 假设顺序：Open -> Low/High -> Close
-        // Conservative assumption: Check SL first using High/Low
-        
+        // 1. 检查当前持仓是否触发 SL/TP
         if position_size != 0.0 {
             let mut exit_price = 0.0;
             let mut reason = "".to_string();
             let mut triggered = false;
 
-            if position_size > 0.0 {
-                // Long: Check SL (Low) and TP (High)
-                let sl_price = entry_price * (1.0 - sl_pct);
-                let tp_price = entry_price * (1.0 + tp_pct);
+            // Determine SL/TP prices
+            let (sl_price, tp_price) = if use_atr {
+                // Dynamic ATR based
+                let dist_sl = entry_atr * sl_val;
+                let dist_tp = entry_atr * tp_val;
+                if position_size > 0.0 {
+                    (entry_price - dist_sl, entry_price + dist_tp)
+                } else {
+                    (entry_price + dist_sl, entry_price - dist_tp)
+                }
+            } else {
+                // Fixed Percentage based
+                if position_size > 0.0 {
+                    (entry_price * (1.0 - sl_val), entry_price * (1.0 + tp_val))
+                } else {
+                    (entry_price * (1.0 + sl_val), entry_price * (1.0 - tp_val))
+                }
+            };
 
-                if lo <= sl_price {
+            // Check
+            if position_size > 0.0 {
+                // Long
+                 if lo <= sl_price {
                     // SL Hit
-                    // 如果 Open 已经低于 SL (Gap Down)，则以 Open 成交，否则以 SL 价格成交
                     exit_price = if op < sl_price { op } else { sl_price };
                     reason = "sl".to_string();
                     triggered = true;
-                } else if hi >= tp_price {
-                    // TP Hit
-                    // 如果 Open 已经高于 TP (Gap Up)，则以 Open 成交，否则以 TP 价格成交
+                } else if tp_val > 0.0 && hi >= tp_price {
+                    // TP Hit (only if tp_val > 0)
                     exit_price = if op > tp_price { op } else { tp_price };
                     reason = "tp".to_string();
                     triggered = true;
                 }
             } else if position_size < 0.0 {
-                 // Short: Check SL (High) and TP (Low)
-                let sl_price = entry_price * (1.0 + sl_pct);
-                let tp_price = entry_price * (1.0 - tp_pct);
-
+                // Short
                 if hi >= sl_price {
-                     // SL Hit
+                    // SL Hit
                     exit_price = if op > sl_price { op } else { sl_price };
                     reason = "sl".to_string();
                     triggered = true;
-                } else if lo <= tp_price {
-                     // TP Hit
+                } else if tp_val > 0.0 && lo <= tp_price {
+                    // TP Hit
                     exit_price = if op < tp_price { op } else { tp_price };
                     reason = "tp".to_string();
                     triggered = true;
@@ -336,47 +354,48 @@ fn simulate_trades(
             }
 
             if triggered {
-                // 执行平仓
+                // Execute Exit
                 let pnl = (exit_price - entry_price) * position_size;
                 cash += pnl;
                 trades.push((entry_ts, ts, entry_price, exit_price, pnl, reason));
                 position_size = 0.0;
                 entry_price = 0.0;
                 entry_ts = 0;
+                entry_atr = 0.0; // Reset entry_atr
             }
         }
 
-        // 2. 处理新信号 (Signal Execution)
-        // 处理信号
+        // 2. 处理新信号
         if sig != 0 {
-             // 简化：全部按 Close 价成交
-             // 如果有反向持仓，先平仓
+             // Flip logic
              if position_size != 0.0 && ((sig == 1 && position_size == -1.0) || (sig == -1 && position_size == 1.0)) {
                  let exit_price = cl;
                  let pnl = (exit_price - entry_price) * position_size;
                  cash += pnl;
                  trades.push((entry_ts, ts, entry_price, exit_price, pnl, "signal_flip".to_string()));
                  position_size = 0.0;
+                 entry_atr = 0.0; // Reset entry_atr
              }
 
-             // 开新仓
+             // Open new logic
              if position_size == 0.0 {
                  if sig == 1 {
                      position_size = 1.0;
                      entry_price = cl;
                      entry_ts = ts;
+                     entry_atr = current_atr;
                  } else if sig == -1 {
                      if allow_short {
                          position_size = -1.0;
                          entry_price = cl;
                          entry_ts = ts;
+                         entry_atr = current_atr;
                      }
                  }
              }
         }
 
-        // 记录权益
-        // Equity = Cash + Unrealized PnL
+        // Record Equity
         let unrealized_pnl = if position_size != 0.0 {
             (cl - entry_price) * position_size
         } else {
