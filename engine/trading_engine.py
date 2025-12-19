@@ -1,6 +1,7 @@
 """实盘/纸面/干跑交易引擎（TradingEngine）。
 
-目标是“一眼能看懂”：配置 → 行情源 → 策略/风控/执行 → PnL 日内控制 → 总结。
+配置 → 行情源 → 策略/风控/执行 → PnL 日内控制 → 总结。
+本模块是系统运转的核心心脏，负责将各个积木拼接起来。
 """
 
 from __future__ import annotations
@@ -67,7 +68,8 @@ class TradingEngine(BaseEngine):
         broker = self._build_broker(cfg, trade_logger=trade_logger)
         self.broker = broker
         
-        # 如果是实盘且开启恢复，先进行对账
+        # 如果是实盘且开启恢复，先进行对账 (Reconciliation)
+        # 确保系统状态与交易所状态一致
         self._maybe_startup_reconcile(cfg=cfg, broker=broker, logger=logger)
 
         market_client = self._build_market_client(cfg, logger=logger)
@@ -93,6 +95,7 @@ class TradingEngine(BaseEngine):
 
     @staticmethod
     def _build_broker(cfg, *, trade_logger: TradeLogger) -> Broker:
+        """根据配置构建对应的 Broker (模拟/实盘)。"""
         mode_str = cfg.mode.replace("_", "-").lower()
         mode_map = {
             "dry-run": BrokerMode.DRY_RUN,
@@ -122,6 +125,8 @@ class TradingEngine(BaseEngine):
         elif isinstance(recovery_cfg, dict):
             recovery_enabled = bool(recovery_cfg.get("enabled", True))
             recovery_mode = str(recovery_cfg.get("mode") or recovery_mode).strip().lower()
+            
+        # 1. 纯干跑模式 (Dry-Run)：不记账，甚至不怎么撮合，全内存
         if mode == BrokerMode.DRY_RUN:
             symbols_for_rules = [cfg.symbol]
             return DryRunBroker(
@@ -134,6 +139,7 @@ class TradingEngine(BaseEngine):
                 qty_step=cfg.exchange.qty_step,
                 price_step=cfg.exchange.price_step,
             )
+        # 2. 纸面模式 (Paper)：模拟撮合，本地记账
         if mode == BrokerMode.PAPER:
             symbols_for_rules = [cfg.symbol]
             return PaperBroker(
@@ -147,6 +153,7 @@ class TradingEngine(BaseEngine):
                 qty_step=cfg.exchange.qty_step,
                 price_step=cfg.exchange.price_step,
             )
+        # 3. 实盘模式 (Live)：连接真实交易所 API
         return LiveBroker(
             base_url=cfg.exchange.base_url,
             api_key=cfg.exchange.api_key,
@@ -167,6 +174,7 @@ class TradingEngine(BaseEngine):
 
     @staticmethod
     def _maybe_startup_reconcile(*, cfg, broker: Broker, logger) -> None:
+        """检查是否需要在启动时进行对账（仅实盘有效）。"""
         if not isinstance(broker, LiveBroker):
             return
         if not getattr(broker, "recovery_enabled", False):
@@ -179,6 +187,7 @@ class TradingEngine(BaseEngine):
 
     @staticmethod
     def _build_market_client(cfg, *, logger) -> Any:
+        """构建行情客户端，实盘连接 WS，回测/干跑使用模拟源或 WS。"""
         mode = cfg.mode.replace("_", "-").lower()
         ws_url = getattr(cfg.exchange, "ws_url", None) or "wss://stream.binance.com:9443/ws"
         if mode in {"live", "real", "paper", "live-testnet", "live-mainnet"}:
@@ -187,6 +196,7 @@ class TradingEngine(BaseEngine):
 
     @staticmethod
     def _maybe_warmup_price(cfg, *, market_client: Any, logger) -> None:
+        """尝试预取一次 REST 价格作为基准，避免 WebSocket 建立前的真空期。"""
         if not isinstance(market_client, BinanceMarketClient):
             return
         try:
@@ -207,6 +217,7 @@ class TradingEngine(BaseEngine):
         market_client: Any,
         logger,
     ) -> None:
+        """进入事件驱动的主循环。"""
         current_trading_day: date | None = None
         last_pnl_log_ts: datetime | None = None
         log_interval_secs = 5
@@ -214,10 +225,10 @@ class TradingEngine(BaseEngine):
         def _on_tick(tick) -> None:
             """Tick 事件回调函数。
             
-            每收到一个行情 tick，执行一次：
-            1. 更新最新价格。
-            2. 检查由是否跨日 (rolling day)。
-            3. 策略计算信号 (prepare_signals)。
+            每收到一个行情 tick，执行核心逻辑：
+            1. 更新最新价格 (last_prices)。
+            2. 检查由是否跨日 (rolling day)，如果跨日则重置日内统计。
+            3. 策略计算信号 (prepare_signals)：调用 strategy -> risk -> sizer。
             4. 执行信号 (broker.execute)。
             5. 定期更新和打印 PnL (盈亏)。
             """
@@ -234,6 +245,7 @@ class TradingEngine(BaseEngine):
             )
 
             # 调用 pipeline 生成过滤后的交易信号
+            # pipeline 包含: 策略(Signal) -> 风控(Filter) -> 仓位管理(Sizing)
             filtered_signals = prepare_signals(
                 tick=tick,
                 strategy=strat,
@@ -264,6 +276,7 @@ class TradingEngine(BaseEngine):
                 logger=logger,
             )
 
+        # 启动市场事件源，开始接收 Tick
         source = MarketEventSource(market_client=market_client, symbol=cfg.symbol, logger=logger)
         self.run_loop(source=source, on_tick=_on_tick, max_events=self._max_ticks, logger=logger)
 
@@ -276,6 +289,7 @@ class TradingEngine(BaseEngine):
         risk: RiskManager,
         logger,
     ) -> date:
+        """检查并处理跨日逻辑。"""
         if current_day is None:
             return tick_day
         if tick_day == current_day:
@@ -299,6 +313,7 @@ class TradingEngine(BaseEngine):
         log_interval_secs: int,
         logger,
     ) -> datetime | None:
+        """计算并更新实时 PnL，同时按照间隔打印心跳日志。"""
         unrealized_pnl = compute_unrealized_pnl(broker.positions, last_prices)
         broker.unrealized_pnl = unrealized_pnl
         total_pnl = broker.realized_pnl_today + unrealized_pnl
@@ -322,6 +337,7 @@ class TradingEngine(BaseEngine):
 
     @staticmethod
     def _build_summary(broker: Broker) -> dict[str, Any]:
+        """构建运行结束后的总结报告。"""
         return {
             "positions": broker.positions,
             "realized_pnl_today": broker.realized_pnl_today,

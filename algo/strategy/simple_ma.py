@@ -1,4 +1,7 @@
-"""简单均线交叉策略。"""
+"""简单均线交叉策略。
+
+核心逻辑：当短周期均线向上突破长周期均线时买入（金叉），反之卖出（死叉）。
+"""
 
 from collections import deque
 from datetime import datetime
@@ -52,6 +55,7 @@ class SimpleMAStrategy(Strategy):
 
         if tick.features and self.short_feature in tick.features and self.long_feature in tick.features:
             # 1. 优先使用外部计算好的特征 (features)
+            # 适用于回测或已有特征工程的情况
             short_ma = float(tick.features[self.short_feature])
             long_ma = float(tick.features[self.long_feature])
             if math.isnan(short_ma) or math.isnan(long_ma):
@@ -60,7 +64,7 @@ class SimpleMAStrategy(Strategy):
             if self.require_features:
                 return []
             
-            # 2. 如果没有特征，则在内存中维护价格队列实时计算
+            # 2. 如果没有特征，则在内存中维护价格队列实时计算 (Streaming 计算)
             self.prices.append(tick.price)
             if len(self.prices) < self.long_window:
                 return []
@@ -68,14 +72,14 @@ class SimpleMAStrategy(Strategy):
             short_ma = sum(list(self.prices)[-self.short_window:]) / self.short_window
             long_ma = sum(self.prices) / len(self.prices)
 
-        # 信号强度过滤
+        # 信号强度过滤：如果均线粘合（差值过小），则不产生信号
         if short_ma is None or long_ma is None:
             return []
         if abs(short_ma - long_ma) < self.min_ma_diff:
             return []
 
         now = tick.ts
-        # 冷却过滤
+        # 冷却过滤：防止在短时间内连续发单
         if now and self.last_trade_ts is not None:
             delta = (now - self.last_trade_ts).total_seconds()
             if delta < self.cooldown_secs:

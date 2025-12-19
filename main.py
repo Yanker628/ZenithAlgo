@@ -2,10 +2,10 @@
 
 该模块提供单一入口 `main.py`，通过子命令驱动不同任务：
 
-- `runner`：实时/纸面/干跑主循环。
-- `backtest`：单次回测。
-- `sweep`：参数搜索/批量回测。
-- `walkforward`：Walk-Forward 验证。
+- `runner`：实时/纸面/干跑主循环。负责连接交易所，执行策略。
+- `backtest`：单次回测。对历史数据进行策略验证。
+- `sweep`：参数搜索/批量回测。寻找最优策略参数。
+- `walkforward`：Walk-Forward 验证。滚动窗口测试策略稳健性。
 """
 
 from __future__ import annotations
