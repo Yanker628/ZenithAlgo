@@ -41,6 +41,7 @@ backtest:
   quiet_risk_logs: true
   flatten_on_end: true
   record_equity_each_bar: true
+  factors: []
 
   fees:
     maker: 0.0002

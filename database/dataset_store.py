@@ -15,7 +15,11 @@ from utils.hashing import sha256_file, sha256_text
 
 def _ensure_datetime(df: pd.DataFrame, col: str) -> None:
     if col in df.columns and not pd.api.types.is_datetime64_any_dtype(df[col]):
-        df[col] = pd.to_datetime(df[col], utc=True)
+        try:
+            df[col] = pd.to_datetime(df[col], utc=True)
+        except Exception:
+            # 兼容混合 ISO8601 格式（是否带毫秒可能不一致）
+            df[col] = pd.to_datetime(df[col], utc=True, format="mixed")
 
 
 def _format_ts(val: Any) -> str | None:

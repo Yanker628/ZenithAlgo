@@ -365,7 +365,7 @@ class BacktestEngine(BaseEngine):
         long_feature = str(bt_params.get("long_feature", "ma_long"))
 
         factors_cfg = bt_cfg.factors
-        if not factors_cfg:
+        if factors_cfg is None:
             short_w = int(_resolve_strategy_param(bt_cfg, cfg, "short_window", 0) or 0)
             long_w = int(_resolve_strategy_param(bt_cfg, cfg, "long_window", 0) or 0)
             factors_cfg = [
