@@ -10,6 +10,8 @@ from analysis.metrics.metrics import compute_metrics
 from broker.execution.simulator import BacktestFillSimulator
 from broker.execution.slippage_models import BpsSlippageModel
 from database.dataset_store import DatasetStore
+from engine.backtest_engine import BacktestEngine
+from engine.sources.event_source import PandasFrameEventSource
 from shared.config.config_loader import BacktestConfig
 from shared.models.models import OrderSignal, Position
 from algo.risk.manager import RiskManager
@@ -227,3 +229,33 @@ def run_ma_crossover_vectorized(cfg_obj) -> VectorBacktestResult:
             signals.append({"ts": ts, "side": "sell", "qty": 0.0})
 
     return run_signal_vectorized(cfg_obj, price_df=df, signals=signals)
+
+
+def run_trend_filtered_vectorized(cfg_obj) -> VectorBacktestResult:
+    """向量化回测：复用策略逻辑生成信号（trend_filtered 试点）。"""
+    bt_cfg = getattr(cfg_obj, "backtest", None)
+    if not isinstance(bt_cfg, BacktestConfig):
+        raise ValueError("backtest config not found")
+
+    candles_df, feature_cols, _ = BacktestEngine._load_candles_and_features(cfg_obj, bt_cfg)
+    if candles_df.empty:
+        return VectorBacktestResult(equity_curve=[], metrics={}, trades=[])
+
+    strategy = BacktestEngine._build_strategy(cfg_obj, bt_cfg)
+    source = PandasFrameEventSource(candles_df, feature_cols=feature_cols)
+
+    signals: list[dict[str, Any]] = []
+    for tick in source.events():
+        for sig in strategy.on_tick(tick):
+            signals.append(
+                {
+                    "ts": tick.ts,
+                    "side": sig.side,
+                    "qty": float(sig.qty or 0.0),
+                    "price": sig.price,
+                }
+            )
+
+    price_df = candles_df.rename(columns={"ts": "end_ts"}).copy()
+    price_df["end_ts"] = pd.to_datetime(price_df["end_ts"], utc=True)
+    return run_signal_vectorized(cfg_obj, price_df=price_df, signals=signals)

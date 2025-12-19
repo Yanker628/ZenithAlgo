@@ -360,18 +360,38 @@ class BacktestEngine(BaseEngine):
         )
         candles_df = _candles_to_frame(candles)
 
+        strategy_obj = getattr(cfg, "strategy", None)
+        base_type = str(getattr(strategy_obj, "type", None) or "simple_ma")
+        bt_strategy = bt_cfg.strategy
+        bt_type = str(getattr(bt_strategy, "type", None) or base_type)
+
         bt_params = dict(getattr(bt_cfg.strategy, "params", {}) or {})
         short_feature = str(bt_params.get("short_feature", "ma_short"))
         long_feature = str(bt_params.get("long_feature", "ma_long"))
 
         factors_cfg = bt_cfg.factors
-        if factors_cfg is None:
+        if not factors_cfg:
             short_w = int(_resolve_strategy_param(bt_cfg, cfg, "short_window", 0) or 0)
             long_w = int(_resolve_strategy_param(bt_cfg, cfg, "long_window", 0) or 0)
             factors_cfg = [
                 {"name": "ma", "params": {"window": short_w, "price_col": "close", "out_col": short_feature}},
                 {"name": "ma", "params": {"window": long_w, "price_col": "close", "out_col": long_feature}},
             ]
+            if bt_type == "trend_filtered":
+                atr_period = int(_resolve_strategy_param(bt_cfg, cfg, "atr_period", 14) or 14)
+                atr_feature = str(bt_params.get("atr_feature", "atr_14"))
+                factors_cfg.append(
+                    {
+                        "name": "atr",
+                        "params": {
+                            "period": atr_period,
+                            "high_col": "high",
+                            "low_col": "low",
+                            "close_col": "close",
+                            "out_col": atr_feature,
+                        },
+                    }
+                )
 
         factors = build_factors(factors_cfg)
         candles_df = apply_factors(candles_df, factors) if not candles_df.empty else candles_df

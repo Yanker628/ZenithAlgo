@@ -90,7 +90,7 @@ class SweepConfig(BaseModel):
     """扫参配置（grid/random）。"""
     enabled: bool = False
     mode: Literal["grid", "random"] = "grid"
-    # 是否启用向量化回测（默认走信号序列；当前内置适配器仅支持 simple_ma）
+    # 是否启用向量化回测（默认走信号序列；当前内置适配器支持 simple_ma / trend_filtered）
     vectorized: bool = True
     # 是否在 sweep 结束后额外跑一次“最佳参数单次回测”并导出 trades/equity/report 等产物。
     # 默认关闭：只输出 best_params 与 best_metrics，避免重复跑一遍回测。

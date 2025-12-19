@@ -23,10 +23,13 @@ risk:
 
 # === 修改点 1: 策略基础配置 ===
 strategy:
-  type: "tick_scalper" # ★ 必须与你 V2.3 代码中的注册名一致
+  type: "trend_filtered" # ★ 必须与你 V2.3 代码中的注册名一致
   # 默认参数（用于实盘或非 sweep 模式）
-  window: 5
-  threshold: 0.0001
+  short_window: 5
+  long_window: 60
+  slope_threshold: 0.1
+  slope_lookback: 5
+  atr_period: 14
   atr_stop_multiplier: 2.0 # ★ V2.3 止损倍数
 
 backtest:
@@ -54,12 +57,14 @@ backtest:
 
   # 回测时的策略覆盖配置
   strategy:
-    type: "simple_ma"
+    type: "trend_filtered"
     params:
-      short_window: 10
-      long_window: 30
-      min_ma_diff: 0.0
-      cooldown_secs: 0
+      short_window: 5
+      long_window: 60
+      slope_threshold: 0.1
+      slope_lookback: 5
+      atr_period: 14
+      atr_stop_multiplier: 2.0
 
   sweep:
     enabled: true
@@ -80,11 +85,11 @@ backtest:
       long_window: [60, 90, 120, 150, 180, 210]
       short_window: [5, 10, 15, 20, 25]
 
-      # # 核心验证：斜率过滤器多强才合适？
-      # slope_threshold: [0.05, 0.1, 0.2]
+      # 核心验证：斜率过滤器多强才合适？
+      slope_threshold: [0.0, 0.05, 0.1]
 
-      # (可选) 如果你想验证止损宽松度，可以把下面这行取消注释
-      # atr_stop_multiplier: [1.5, 2.0, 3.0]
+      # 验证止损宽松度
+      atr_stop_multiplier: [1.5, 2.0, 3.0]
 
     objective:
       total_return_weight: 0.3

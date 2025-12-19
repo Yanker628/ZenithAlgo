@@ -40,9 +40,9 @@ result = run_signal_vectorized(
 print(result.metrics)
 ```
 
-## 4. simple_ma 试点（已内置）
+## 4. simple_ma / trend_filtered 试点（已内置）
 
-当前内置适配器：`simple_ma`。
+当前内置适配器：`simple_ma`、`trend_filtered`。
 
 当 `backtest.sweep.vectorized=true` 且 `strategy.type=simple_ma` 时，
 会自动走向量化回测，无需手动传 signals。
@@ -61,6 +61,21 @@ strategy:
     long_window: 20
 ```
 
+`trend_filtered` 同理：
+
+```yaml
+backtest:
+  sweep:
+    enabled: true
+    vectorized: true
+strategy:
+  type: trend_filtered
+  params:
+    short_window: 10
+    long_window: 60
+    slope_threshold: 0.1
+```
+
 ## 5. 迁移其它策略的建议
 
 只要策略能输出 `signals` 序列，就可以接入向量化回测：
@@ -70,3 +85,30 @@ strategy:
 3. 对齐 `BacktestEngine` 输出结果（指标/权益曲线）
 
 这样可以保证回测与实盘逻辑一致，便于逐步替换事件驱动回测。
+
+## 6. 对齐验证流程（建议每次接入新策略时做一次）
+
+目标：确保向量化结果与事件驱动回测一致，避免逻辑漂移。
+
+步骤：
+
+1. 先跑一轮 sweep（`backtest.sweep.vectorized=true`）。
+2. 从 `sweep.csv` 选一组参数（建议取 score 最高或你关注的组合）。
+3. 把该参数写回 `backtest.strategy.params`（与 sweep 保持一致）。
+4. 跑一次 backtest。
+5. 对比两者的关键指标：`total_return/max_drawdown/sharpe/total_trades`。
+
+示例命令：
+
+```bash
+.venv/bin/python main.py sweep --config config/config.yml
+.venv/bin/python main.py backtest --config config/config.yml
+```
+
+对齐标准：数值完全一致或仅有浮点级别误差（1e-12 量级）。
+
+自动化脚本（推荐）：
+
+```bash
+.venv/bin/python utils/sweep_parity_check.py --config config/config.yml --sample-size 3 --sample-mode random
+```

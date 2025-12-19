@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from shared.config.config_loader import BacktestConfig
-from engine.vector_backtest import run_ma_crossover_vectorized, run_signal_vectorized
+from engine.vector_backtest import run_ma_crossover_vectorized, run_signal_vectorized, run_trend_filtered_vectorized
 
 
 def test_vector_backtest_ma_basic(tmp_path):
@@ -103,3 +103,67 @@ def test_vector_backtest_with_signals(tmp_path):
     result = run_signal_vectorized(cfg, price_df=price_df, signals=signals)
     assert result.equity_curve
     assert len(result.trades) >= 1
+
+
+def test_vector_backtest_trend_filtered_basic(tmp_path):
+    df = pd.DataFrame(
+        {
+            "symbol": ["BTCUSDT"] * 8,
+            "open": [1, 2, 3, 4, 5, 6, 7, 8],
+            "high": [2, 3, 4, 5, 6, 7, 8, 9],
+            "low": [0, 1, 2, 3, 4, 5, 6, 7],
+            "close": [1, 2, 3, 4, 5, 6, 7, 8],
+            "volume": [1] * 8,
+            "start_ts": [
+                "2024-01-01T00:00:00Z",
+                "2024-01-01T01:00:00Z",
+                "2024-01-01T02:00:00Z",
+                "2024-01-01T03:00:00Z",
+                "2024-01-01T04:00:00Z",
+                "2024-01-01T05:00:00Z",
+                "2024-01-01T06:00:00Z",
+                "2024-01-01T07:00:00Z",
+            ],
+            "end_ts": [
+                "2024-01-01T01:00:00Z",
+                "2024-01-01T02:00:00Z",
+                "2024-01-01T03:00:00Z",
+                "2024-01-01T04:00:00Z",
+                "2024-01-01T05:00:00Z",
+                "2024-01-01T06:00:00Z",
+                "2024-01-01T07:00:00Z",
+                "2024-01-01T08:00:00Z",
+            ],
+        }
+    )
+    data_dir = tmp_path / "dataset" / "history"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = data_dir / "BTCUSDT_1h.csv"
+    df.to_csv(csv_path, index=False)
+
+    cfg = type("Cfg", (), {})()
+    cfg.strategy = type(
+        "Strategy",
+        (),
+        {
+            "type": "trend_filtered",
+            "params": {
+                "short_window": 2,
+                "long_window": 3,
+                "slope_threshold": 0.0,
+                "slope_lookback": 1,
+            },
+        },
+    )()
+    cfg.backtest = BacktestConfig(
+        data_dir=str(data_dir),
+        symbol="BTCUSDT",
+        interval="1h",
+        start="2024-01-01T00:00:00Z",
+        end="2024-01-01T08:00:00Z",
+        initial_equity=1000.0,
+    )
+
+    result = run_trend_filtered_vectorized(cfg)
+    assert result.equity_curve
+    assert "total_return" in result.metrics
