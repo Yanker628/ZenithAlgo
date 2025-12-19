@@ -1,4 +1,5 @@
 # ZenithAlgo 2.0 Roadmap（全景架构版）
+
 当前版本：v2.0-Alpha
 最后核对：2025-12-20
 
@@ -16,7 +17,13 @@
 目标：建立跨语言、高性能的数据底座。
 
 - [x] M6-1 元信息 Hash：生成 meta.json 并计算 data_hash，实现数据集指纹识别。
-- [x] M6-2 列式存储：引入 Parquet 缓存（Snappy 压缩），优先读取 .parquet 提升加载速度。
+- [x] **Project Restructuring (Monorepo)**
+  - [x] Backend/Frontend Directory Split
+  - [x] `src/zenith` Domain-Driven Layout
+  - [x] Unified `main.py` CLI
+- [ ] **Frontend Development**
+  - [ ] Next.js Initialization
+  - [ ] Dashboard UI
 - [ ] M6-3 DatasetStore：在 database/ 下抽象统一的数据加载接口，屏蔽底层文件细节。
 - [ ] M7 一致性对齐：通过固定 data_hash 对比回测引擎与实盘引擎的信号差异。
   - 备注：当前以信号一致性为验收口径，成交/费用/滑点一致性后续补测。

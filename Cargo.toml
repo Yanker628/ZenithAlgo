@@ -1,3 +1,0 @@
-[workspace]
-members = ["libs/rust_core"]
-resolver = "2"

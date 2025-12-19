@@ -1,0 +1,31 @@
+symbol: "SOLUSDT"
+timeframe: "1h"
+
+strategy:
+  type: "volatility_breakout"
+  params:
+    window: 30
+    k: 1.5
+    atr_stop_multiplier: 2.0
+    atr_period: 20
+
+backtest:
+  data_dir: "dataset/history"
+  symbol: "SOLUSDT"
+  interval: "1h"
+  # Out-of-Sample Period: 2024
+  start: "2024-01-01T00:00:00Z"
+  end: "2025-01-01T00:00:00Z"
+  initial_equity: 10000
+
+  auto_download: true # Will download 2024 data if missing
+
+  fees:
+    maker: 0.0002
+    taker: 0.0004
+    slippage_bp: 1.0
+
+  # Use Vectorized Engine (via RustSimulator) for consistency
+  sweep:
+    enabled: false # Single run
+    vectorized: true
