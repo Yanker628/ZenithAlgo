@@ -31,7 +31,7 @@ strategy:
 
 backtest:
   data_dir: "dataset/history"
-  symbol: "DOGEUSDT"
+  symbol: "SOLUSDT"
   interval: "1h"
   # 为了 Walk-Forward 验证效果，建议覆盖完整周期（牛-熊-震荡）
   start: "2021-01-01T00:00:00Z"
@@ -54,11 +54,17 @@ backtest:
 
   # 回测时的策略覆盖配置
   strategy:
-    type: "trend_filtered" # ★ 保持一致
+    type: "simple_ma"
+    params:
+      short_window: 10
+      long_window: 30
+      min_ma_diff: 0.0
+      cooldown_secs: 0
 
   sweep:
     enabled: true
     mode: "grid"
+    vectorized: true
     # 默认不额外跑一次“最佳参数单次回测”（避免重复计算）：
     # 只输出 best_params + best_metrics，等你手动把参数写回 config 再跑 backtest。
     # 如需自动生成 best_backtest 产物：改为 true。

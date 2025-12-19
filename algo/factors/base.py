@@ -1,7 +1,4 @@
-"""因子（Factors/Features）抽象协议。
-
-V2.3 约定：因子层是“纯计算”，输入 CandleFrame（pandas DataFrame），输出添加列后的 DataFrame。
-"""
+"""因子（Factors/Features）抽象协议。"""
 
 from __future__ import annotations
 
@@ -18,4 +15,4 @@ class Factor(Protocol):
 
     def compute(self, df: pd.DataFrame) -> pd.DataFrame:
         """对输入 df 添加/更新因子列并返回 df。"""
-
+        ...

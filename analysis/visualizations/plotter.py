@@ -168,6 +168,8 @@ def plot_sweep_heatmap(
         filters=filters,
         mask_filtered=mask_filtered,
     )
+    if pivot.empty or pivot.isna().all().all():
+        return None
     plt = _require_matplotlib()
     fig, ax = plt.subplots(figsize=(8, 6))
     sns.heatmap(pivot, annot=True, fmt=".2f", cmap="coolwarm", ax=ax)
@@ -233,6 +235,8 @@ def plot_sweep_heatmaps(
             filters=filters,
             mask_filtered=mask_filtered,
         )
+        if pivot.empty or pivot.isna().all().all():
+            return None
         plt = _require_matplotlib()
         fig, ax = plt.subplots(figsize=(8, 6))
         sns.heatmap(pivot, annot=True, fmt=".2f", cmap="coolwarm", ax=ax)

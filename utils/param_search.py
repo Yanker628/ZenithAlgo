@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from engine.backtest_engine import BacktestEngine
+from engine.vector_backtest import run_ma_crossover_vectorized
 from shared.config.config_loader import BacktestConfig, StrategyConfig, load_config
 
 
@@ -121,8 +122,14 @@ def _run_single_combo(
     bt_cfg.skip_plots = True
     cfg.backtest = bt_cfg  # type: ignore[assignment]
 
-    summary = BacktestEngine(cfg_obj=cfg).run().summary
-    metrics = summary.metrics.model_dump() if hasattr(summary, "metrics") else {}
+    use_vectorized = bool(getattr(bt_cfg.sweep, "vectorized", True))
+    strategy_type = str(getattr(bt_cfg.strategy, "type", "") or getattr(cfg.strategy, "type", ""))
+    if use_vectorized and strategy_type == "simple_ma":
+        vec = run_ma_crossover_vectorized(cfg)
+        metrics = vec.metrics
+    else:
+        summary = BacktestEngine(cfg_obj=cfg).run().summary
+        metrics = summary.metrics.model_dump() if hasattr(summary, "metrics") else {}
     score = _calc_score(metrics, weights, low_trades_penalty=low_trades_penalty)
     reason = _filter_reason(metrics, filters)
     passed = reason is None

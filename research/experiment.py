@@ -23,6 +23,7 @@ from engine.backtest_engine import BacktestEngine
 from engine.walkforward_engine import WalkforwardEngine
 from analysis.metrics.diagnostics import compute_diagnostics
 from database.dataset_store import DatasetStore
+from market_data.loader import HistoricalDataLoader
 from utils.hashing import sha256_text
 from utils.json_sanitize import sanitize_for_json
 from analysis.metrics.metrics_canon import canonicalize_metrics, validate_metrics_schema
@@ -69,11 +70,49 @@ def _config_hash(cfg_path: str) -> str:
     return sha256_text(Path(cfg_path).read_text(encoding="utf-8"))
 
 
+def _parse_dt(val: str) -> datetime:
+    try:
+        if val.isdigit():
+            ts_int = int(val)
+            if ts_int > 1_000_000_000_000:
+                return datetime.fromtimestamp(ts_int / 1000, tz=timezone.utc)
+            return datetime.fromtimestamp(ts_int, tz=timezone.utc)
+        return datetime.fromisoformat(val.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except Exception as exc:
+        raise ValueError(f"Invalid datetime value: {val}") from exc
+
+
 def _data_hashes(cfg_obj, *, symbols: list[str]) -> tuple[str, dict[str, str]]:
     bt_cfg = getattr(cfg_obj, "backtest", None)
     if not isinstance(bt_cfg, BacktestConfig):
         raise ValueError("backtest config not found")
     interval = str(bt_cfg.interval)
+    auto_download = bool(getattr(bt_cfg, "auto_download", False))
+    force_download = bool(getattr(bt_cfg, "force_download", False))
+    if auto_download or force_download:
+        # sweep/backtest 前确保数据就绪，避免 hash 阶段直接报缺失
+        loader = HistoricalDataLoader(bt_cfg.data_dir)
+        start_dt = _parse_dt(str(bt_cfg.start))
+        end_dt = _parse_dt(str(bt_cfg.end))
+        for symbol in symbols:
+            try:
+                loader.load_klines_for_backtest(
+                    symbol,
+                    interval,
+                    start_dt,
+                    end_dt,
+                    auto_download=auto_download,
+                    force_download=force_download,
+                )
+            except Exception as exc:  # noqa: BLE001 - 统一抛出清晰的用户级错误
+                detail = f"{type(exc).__name__}: {exc}"
+                raise ValueError(
+                    "数据下载失败："
+                    f"symbol={symbol}, interval={interval}, "
+                    f"start={start_dt.isoformat()}, end={end_dt.isoformat()}。"
+                    f"原因={detail}。"
+                    "请确认交易对是否存在、网络可用，以及 Binance API 可访问。"
+                ) from exc
     store = DatasetStore(bt_cfg.data_dir)
     return store.data_hashes(symbols, interval)
 
@@ -439,7 +478,7 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
                     filters=filters,
                     x_values=list(param_grid.get(x_param, []) or []),
                     y_values=list(param_grid.get(y_param, []) or []),
-                    mask_filtered=True,
+                    mask_filtered=False,
                 )
                 viz.update({"type": "heatmap", "x": x_param, "y": y_param, "value": value_param})
 
@@ -464,7 +503,7 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
                         filters=filters,
                         x_values=list(param_grid.get(x_param, []) or []),
                         y_values=list(param_grid.get(y_param, []) or []),
-                        mask_filtered=True,
+                        mask_filtered=False,
                     )
             else:
                 p0 = keys[0]

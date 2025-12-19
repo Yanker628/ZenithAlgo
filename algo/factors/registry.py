@@ -11,6 +11,7 @@ from algo.factors.atr import ATRFactor
 from algo.factors.base import Factor
 from algo.factors.ma import MAFactor
 from algo.factors.rsi import RSIFactor
+from algo.factors.ema import EMAFactor
 
 _REGISTRY: dict[str, type] = {}
 
@@ -94,3 +95,4 @@ def apply_factors(df: pd.DataFrame, factors: list[Factor]) -> pd.DataFrame:
 register_factor("ma", MAFactor)
 register_factor("rsi", RSIFactor)
 register_factor("atr", ATRFactor)
+register_factor("ema", EMAFactor)

@@ -1,4 +1,4 @@
-.PHONY: help lint test build clean consistency-check
+.PHONY: help lint test build clean consistency-check rust-dev rust-test
 
 PYTHON := $(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
 
@@ -7,6 +7,8 @@ help:
 	@echo "  make lint   - markdownlint (requires markdownlint-cli)"
 	@echo "  make test   - run pytest (skip live by default)"
 	@echo "  make consistency-check - consistency check (backtest vs dry-run)"
+	@echo "  make rust-dev - build & install Rust extension (maturin develop)"
+	@echo "  make rust-test - run Rust parity tests"
 	@echo "  make build  - placeholder"
 	@echo "  make clean  - placeholder"
 
@@ -22,6 +24,12 @@ test:
 
 consistency-check:
 	@$(PYTHON) -m pytest -q tests/test_consistency_m7.py
+
+rust-dev:
+	@cd libs/rust_core && PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 $(PYTHON) -m maturin develop
+
+rust-test:
+	@$(PYTHON) -m pytest -q tests/test_rust_factor_parity.py
 
 build:
 	@echo "build: placeholder (no build pipeline configured yet)"

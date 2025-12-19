@@ -7,6 +7,12 @@ from typing import Any
 
 import pandas as pd
 
+from shared.utils.logging import setup_logger
+
+_LOGGER = setup_logger("factor-rsi")
+_RUST_LOGGED = False
+_FALLBACK_LOGGED = False
+
 
 @dataclass(frozen=True)
 class RSIFactor:
@@ -36,6 +42,23 @@ class RSIFactor:
             raise ValueError(f"RSIFactor requires column: {self.price_col}")
         out = self.out_col or f"rsi_{self.period}"
 
+        try:
+            import zenithalgo_rust
+        except Exception:
+            zenithalgo_rust = None
+        if zenithalgo_rust is not None:
+            global _RUST_LOGGED
+            if not _RUST_LOGGED:
+                _LOGGER.info("RSIFactor 使用 Rust 算子加速。")
+                _RUST_LOGGED = True
+            values = df[self.price_col].astype(float).to_list()
+            df[out] = zenithalgo_rust.rsi(values, int(self.period))  # type: ignore
+            return df
+        global _FALLBACK_LOGGED
+        if not _FALLBACK_LOGGED:
+            _LOGGER.warning("RSIFactor Rust 算子不可用，回退到 pandas。")
+            _FALLBACK_LOGGED = True
+
         delta = df[self.price_col].diff()
         gain = delta.clip(lower=0.0)
         loss = (-delta).clip(lower=0.0)
@@ -46,4 +69,3 @@ class RSIFactor:
         rs = avg_gain / avg_loss
         df[out] = 100.0 - (100.0 / (1.0 + rs))
         return df
-

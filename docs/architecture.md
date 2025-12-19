@@ -15,6 +15,7 @@
 - `engine/`：执行引擎层（数据推进 + 调度）
   - `engine/trading_engine.py`：实盘/纸面/干跑
   - `engine/backtest_engine.py`：单次回测
+  - `engine/vector_backtest.py`：向量化回测（sweep 默认启用，仅支持 simple_ma）
   - `engine/signal_pipeline.py`：共享信号处理管线（Strategy→Sizing→Risk→Broker）
 - `algo/strategy/`：策略层（只输出方向与理由）
 - `algo/sizing/` + `utils/sizer.py`：统一下单规模（sizing）
