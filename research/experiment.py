@@ -22,7 +22,8 @@ from typing import Any
 from engine.backtest_engine import BacktestEngine
 from engine.walkforward_engine import WalkforwardEngine
 from analysis.metrics.diagnostics import compute_diagnostics
-from utils.hashing import sha256_files, sha256_text
+from database.dataset_store import DatasetStore
+from utils.hashing import sha256_text
 from utils.json_sanitize import sanitize_for_json
 from analysis.metrics.metrics_canon import canonicalize_metrics, validate_metrics_schema
 from utils.policy import evaluate_policy
@@ -72,10 +73,9 @@ def _data_hashes(cfg_obj, *, symbols: list[str]) -> tuple[str, dict[str, str]]:
     bt_cfg = getattr(cfg_obj, "backtest", None)
     if not isinstance(bt_cfg, BacktestConfig):
         raise ValueError("backtest config not found")
-    data_dir = str(bt_cfg.data_dir)
     interval = str(bt_cfg.interval)
-    paths = [Path(data_dir) / f"{s}_{interval}.csv" for s in symbols]
-    return sha256_files(paths)
+    store = DatasetStore(bt_cfg.data_dir)
+    return store.data_hashes(symbols, interval)
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -349,6 +349,7 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
 
     symbols_cfg = bt_cfg.symbols
     symbols = [str(s) for s in symbols_cfg] if symbols_cfg else [str(bt_cfg.symbol)]
+    DatasetStore(bt_cfg.data_dir).ensure_meta_for_symbols(symbols, str(bt_cfg.interval))
 
     all_results: dict[str, Any] = {}
     for sym in symbols:

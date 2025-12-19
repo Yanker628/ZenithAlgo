@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, List
 
+from database.dataset_store import DatasetStore
 from engine.backtest_engine import BacktestEngine
 from engine.base_engine import BaseEngine, EngineResult
 from shared.config.config_loader import BacktestConfig, SweepConfig, load_config
@@ -142,6 +143,7 @@ class OptimizationEngine(BaseEngine):
 
         symbols_cfg = bt_cfg.symbols
         symbols = [str(s) for s in symbols_cfg] if symbols_cfg else [str(bt_cfg.symbol)]
+        DatasetStore(bt_cfg.data_dir).ensure_meta_for_symbols(symbols, str(bt_cfg.interval))
 
         base_out_dir = Path(self._artifacts_dir) if self._artifacts_dir is not None else Path("results") / "sweep_engine"
         base_out_dir.mkdir(parents=True, exist_ok=True)

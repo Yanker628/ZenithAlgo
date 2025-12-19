@@ -1,4 +1,4 @@
-.PHONY: help lint test build clean
+.PHONY: help lint test build clean consistency-check
 
 PYTHON := $(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
 
@@ -6,6 +6,7 @@ help:
 	@echo "ZenithAlgo Make Targets"
 	@echo "  make lint   - markdownlint (requires markdownlint-cli)"
 	@echo "  make test   - run pytest (skip live by default)"
+	@echo "  make consistency-check - consistency check (backtest vs dry-run)"
 	@echo "  make build  - placeholder"
 	@echo "  make clean  - placeholder"
 
@@ -18,6 +19,9 @@ lint:
 
 test:
 	@$(PYTHON) -m pytest -q -m "not live"
+
+consistency-check:
+	@$(PYTHON) -m pytest -q tests/test_consistency_m7.py
 
 build:
 	@echo "build: placeholder (no build pipeline configured yet)"

@@ -6,15 +6,13 @@
 from __future__ import annotations
 
 import csv
-import hashlib
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, List
 
-import pandas as pd
 import requests
 
+from database.dataset_store import DatasetStore
 from shared.models.models import Candle, Tick
 
 
@@ -93,11 +91,10 @@ class HistoricalDataLoader:
     """历史 K 线数据管理器。"""
 
     def __init__(self, data_dir: str = "dataset/history"):
-        self.data_dir = Path(data_dir)
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.store = DatasetStore(data_dir)
 
     def _klines_path(self, symbol: str, interval: str) -> Path:
-        return self.data_dir / f"{symbol}_{interval}.csv"
+        return self.store.csv_path(symbol, interval)
 
     def _file_time_range(self, path: Path) -> tuple[datetime | None, datetime | None]:
         min_start = None
@@ -120,116 +117,21 @@ class HistoricalDataLoader:
 
     def generate_meta(self, symbol: str, interval: str) -> None:
         """生成数据集元信息与 Hash 校验"""
-        csv_path = self._klines_path(symbol, interval)
-        if not csv_path.exists():
-            return
-
-        # 1. 计算 Content Hash
-        # 读取二进制内容以保证 Hash 唯一性
-        with csv_path.open("rb") as f:
-            content = f.read()
-            data_hash = hashlib.sha256(content).hexdigest()
-
-        # 2. 读取 CSV 获取元数据
-        # 使用 pandas 读取以快速获取 schema 和行数
-        try:
-            df = pd.read_csv(csv_path)
-            row_count = len(df)
-            columns = list(df.columns)
-            # 假设 CSV 中有 standard columns, 尝试获取时间范围
-            start_time = df["start_ts"].min() if "start_ts" in df.columns and not df.empty else None
-            end_time = df["end_ts"].max() if "end_ts" in df.columns and not df.empty else None
-        except Exception as e:
-            print(f"Warning: Failed to read CSV for meta generation: {e}")
-            row_count = 0
-            columns = []
-            start_time = None
-            end_time = None
-
-        meta = {
-            "symbol": symbol,
-            "interval": interval,
-            "start_time": str(start_time),
-            "end_time": str(end_time),
-            "row_count": row_count,
-            "columns": columns,
-            "data_hash": data_hash,
-            "schema_version": "1.0",
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-        }
-
-        meta_path = self.data_dir / "cache" / f"{symbol}_{interval}.meta.json"
-        meta_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with meta_path.open("w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2, ensure_ascii=False)
+        self.store.generate_meta(symbol, interval)
 
     def load_klines(self, symbol: str, interval: str, start: datetime, end: datetime) -> List[Candle]:
         """从文件读取一段时间的 K 线，优先读取 Parquet 缓存 (M6-2)。"""
-        csv_path = self._klines_path(symbol, interval)
-        # Parquet 缓存路径
-        cache_dir = self.data_dir / "cache"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        parquet_path = cache_dir / f"{symbol}_{interval}.parquet"
+        return self.store.load_klines(symbol, interval, start, end)
 
-        df_kline = pd.DataFrame()
-
-        # 策略：如果 Parquet 存在，直接读；如果不存在但 CSV 存在，读取 CSV 并转换；否则为空
-        if parquet_path.exists():
-            df_kline = pd.read_parquet(parquet_path)
-        elif csv_path.exists():
-            # 自动转换流：发现只有 CSV，触发转换
-            try:
-                df_kline = pd.read_csv(csv_path)
-                
-                # 确保时间列为 datetime (UTC)
-                if "start_ts" in df_kline.columns:
-                     df_kline["start_ts"] = pd.to_datetime(df_kline["start_ts"], utc=True)
-                if "end_ts" in df_kline.columns:
-                     df_kline["end_ts"] = pd.to_datetime(df_kline["end_ts"], utc=True)
-
-                 # 保存为 Parquet (Snappy 压缩)
-                df_kline.to_parquet(parquet_path, engine="pyarrow", compression="snappy")
-                
-                # 同时生成元信息
-                self.generate_meta(symbol, interval)
-                
-            except Exception as e:
-                print(f"Error converting CSV to Parquet: {e}")
-                pass
-        
-        if df_kline.empty:
-            return []
-
-        # 再次确保时间列类型 (防止读取的 Parquet 是旧版本 String 类型)
-        if "start_ts" in df_kline.columns and not pd.api.types.is_datetime64_any_dtype(df_kline["start_ts"]):
-             df_kline["start_ts"] = pd.to_datetime(df_kline["start_ts"], utc=True)
-        if "end_ts" in df_kline.columns and not pd.api.types.is_datetime64_any_dtype(df_kline["end_ts"]):
-             df_kline["end_ts"] = pd.to_datetime(df_kline["end_ts"], utc=True)
-
-
-
-        # 过滤时间范围
-        # Pandas filtering
-        mask = (df_kline["end_ts"] >= start) & (df_kline["start_ts"] <= end)
-        filtered_df = df_kline[mask]
-
-
-        candles: list[Candle] = []
-        for _, row in filtered_df.iterrows():
-            candles.append(
-                Candle(
-                    symbol=row["symbol"],
-                    open=float(row["open"]),
-                    high=float(row["high"]),
-                    low=float(row["low"]),
-                    close=float(row["close"]),
-                    volume=float(row["volume"]),
-                    start_ts=row["start_ts"].to_pydatetime(),
-                    end_ts=row["end_ts"].to_pydatetime(),
-                )
-            )
-        return candles
+    def load_klines_for_symbols(
+        self,
+        symbols: Iterable[str],
+        interval: str,
+        start: datetime,
+        end: datetime,
+    ) -> dict[str, list[Candle]]:
+        """批量加载多个 symbol 的 K 线。"""
+        return self.store.load_klines_for_symbols(symbols, interval, start, end)
 
     def load_klines_for_backtest(
         self,
@@ -344,4 +246,3 @@ class HistoricalDataLoader:
         """将 Candle 序列转换为粗粒度 Tick（按收盘价）。"""
         for c in candles:
             yield Tick(symbol=c.symbol, price=c.close, ts=c.end_ts)
-
