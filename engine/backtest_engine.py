@@ -149,12 +149,7 @@ def _compute_equity(broker: BacktestBroker) -> float:
     )
 
 
-def _row_to_tick(row: Any, *, feature_cols: list[str]) -> Tick:
-    tick_ts = row["ts"]
-    tick_price = float(row["close"])
-    tick_symbol = str(row["symbol"])
-    features = {c: float(row[c]) for c in feature_cols if pd.notna(row[c])}
-    return Tick(symbol=tick_symbol, price=tick_price, ts=tick_ts, features=features or None)
+
 
 
 class BacktestEngine(BaseEngine):
@@ -183,20 +178,23 @@ class BacktestEngine(BaseEngine):
 
     def run(self) -> EngineResult:
         cfg = self._load_cfg()
-        bt_cfg = self._load_bt_cfg(cfg)
+        backtest_config = self._load_bt_cfg(cfg)  # 重命名 bt_cfg -> backtest_config 以提高可读性
         logger = setup_logger("backtest")
 
-        record_equity_each_bar = bool(bt_cfg.record_equity_each_bar)
-        equity_base = float(bt_cfg.initial_equity or getattr(cfg, "equity_base", 0) or 0)
+        record_equity_each_bar = bool(backtest_config.record_equity_each_bar)
+        # 初始化权益基数 (Initial Equity)
+        equity_base = float(backtest_config.initial_equity or getattr(cfg, "equity_base", 0) or 0)
         if equity_base <= 0:
             equity_base = 10000.0
 
-        candles_df, feature_cols, data_health_raw = self._load_candles_and_features(cfg, bt_cfg)
+        # 加载数据与特征 (Data Loading)
+        candles_df, feature_cols, data_health_raw = self._load_candles_and_features(cfg, backtest_config)
         data_health = DataHealth.model_validate(data_health_raw)
 
-        strat = self._build_strategy(cfg, bt_cfg)
-        risk = self._build_risk(cfg, bt_cfg, equity_base=equity_base)
-        broker = self._build_broker(bt_cfg, equity_base=equity_base)
+        # 构建核心组件 (Build Core Components)
+        strategy = self._build_strategy(cfg, backtest_config)
+        risk = self._build_risk(cfg, backtest_config, equity_base=equity_base)
+        broker = self._build_broker(backtest_config, equity_base=equity_base)
         self.broker = broker
 
         sizing_cfg = resolve_sizing_cfg(cfg)
@@ -207,10 +205,13 @@ class BacktestEngine(BaseEngine):
         day_start_equity = equity_base
         signal_trace = SignalTrace()
 
+        # 定义逐 Tick 处理逻辑 (Event Handler)
         def _on_tick(tick: Tick) -> None:
             nonlocal last_ts, current_day, day_start_equity
             last_ts = tick.ts
 
+            # 1. 每日结算检查 (Daily Roll)
+            # 如果日期变更，重置当日 PnL 统计，并更新当日起始权益，用于风控计算（如日内最大亏损）
             current_day, day_start_equity = self._maybe_roll_day(
                 tick_day=tick.ts.date(),
                 current_day=current_day,
@@ -221,7 +222,9 @@ class BacktestEngine(BaseEngine):
                 day_start_equity=day_start_equity,
             )
 
+            # 2. 更新最新价格 (Market Data Update)
             last_prices[tick.symbol] = tick.price
+            # 更新 Broker 内部的未结盈亏，用于风控模块监控实时净值
             self._update_daily_pnl_pct(
                 broker=broker,
                 risk=risk,
@@ -230,9 +233,11 @@ class BacktestEngine(BaseEngine):
                 day_start_equity=day_start_equity,
             )
 
+            # 3. 信号生成与筛选 (Signal Pipeline)
+            # 包含：策略生成 -> 仓位管理(Sizing) -> 风控拦截(Risk) 的全流程
             filtered = prepare_signals(
                 tick=tick,
-                strategy=strat,
+                strategy=strategy,
                 broker=broker,
                 risk=risk,
                 sizing_cfg=sizing_cfg,
@@ -242,6 +247,7 @@ class BacktestEngine(BaseEngine):
                 trace=signal_trace,
             )
 
+            # 4. 信号执行 (Execution)
             if filtered:
                 for sig in filtered:
                     broker.execute(
@@ -251,14 +257,18 @@ class BacktestEngine(BaseEngine):
                         record_equity=(not record_equity_each_bar),
                     )
 
+            # 5. 权益曲线记录 (Equity Recording)
             if record_equity_each_bar:
                 self._record_mtm_equity(broker=broker, last_prices=last_prices, ts=tick.ts)
 
+        # 启动事件循环
+        logger.info("Engine loop start: source=PandasFrameEventSource")
         source = PandasFrameEventSource(candles_df, feature_cols=feature_cols)
         self.run_loop(source=source, on_tick=_on_tick, logger=logger)
+        logger.info("Engine loop end.")
 
         # 结束处理：强制平仓与最终权益点
-        self._maybe_flatten_on_end(bt_cfg, broker=broker, last_prices=last_prices, last_ts=last_ts)
+        self._maybe_flatten_on_end(backtest_config, broker=broker, last_prices=last_prices, last_ts=last_ts)
         self._record_final_equity_point(
             broker=broker,
             last_prices=last_prices,
@@ -284,7 +294,7 @@ class BacktestEngine(BaseEngine):
             signal_trace=signal_trace.to_dict(),
         )
 
-        artifacts = self._export_artifacts(cfg, bt_cfg, broker=broker)
+        artifacts = self._export_artifacts(cfg, backtest_config, broker=broker)
         logger.info("Backtest summary: %s", summary.model_dump())
         return EngineResult(summary=summary, artifacts=artifacts)
 

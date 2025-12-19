@@ -1,0 +1,20 @@
+{
+  "symbol": "BTCUSDT",
+  "interval": "1h",
+  "start_time": "2024-01-01T00:00:00+00:00",
+  "end_time": "2024-01-10T22:00:00+00:00",
+  "row_count": 238,
+  "columns": [
+    "symbol",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "start_ts",
+    "end_ts"
+  ],
+  "data_hash": "31e13abbf8d0f0c715307a99b073a3948995e0f10ea1f7b70e247aa428034670",
+  "schema_version": "1.0",
+  "generated_at": "2025-12-19T15:53:32.218135+00:00"
+}

@@ -61,7 +61,7 @@ class TradingEngine(BaseEngine):
         equity_base = float(getattr(cfg, "equity_base", 0) or 0) or 10000.0
         
         # 构建策略与风控
-        strat = build_strategy(getattr(cfg, "strategy", None))
+        strategy = build_strategy(getattr(cfg, "strategy", None))
         risk = RiskManager(cfg.risk, equity_base=equity_base)
 
         trade_logger = TradeLogger()
@@ -81,7 +81,7 @@ class TradingEngine(BaseEngine):
             cfg=cfg,
             broker=broker,
             risk=risk,
-            strat=strat,
+            strategy=strategy,
             sizing_cfg=sizing_cfg,
             equity_base=equity_base,
             market_client=market_client,
@@ -211,7 +211,7 @@ class TradingEngine(BaseEngine):
         cfg,
         broker: Broker,
         risk: RiskManager,
-        strat,
+        strategy,
         sizing_cfg: dict[str, Any] | None,
         equity_base: float,
         market_client: Any,
@@ -248,7 +248,7 @@ class TradingEngine(BaseEngine):
             # pipeline 包含: 策略(Signal) -> 风控(Filter) -> 仓位管理(Sizing)
             filtered_signals = prepare_signals(
                 tick=tick,
-                strategy=strat,
+                strategy=strategy,
                 broker=broker,
                 risk=risk,
                 sizing_cfg=sizing_cfg,

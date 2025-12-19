@@ -72,14 +72,18 @@ class SimpleMAStrategy(Strategy):
             short_ma = sum(list(self.prices)[-self.short_window:]) / self.short_window
             long_ma = sum(self.prices) / len(self.prices)
 
-        # 信号强度过滤：如果均线粘合（差值过小），则不产生信号
+        # 信号强度过滤 (Noise Filter)：
+        # 如果两条均线过于接近（粘合），往往意味着震荡行情，此时交叉信号不可靠，容易反复止损（Whipsaw）。
+        # 通过引入 min_ma_diff 阈值，只有当趋势明显（开口扩大）时才允许触发信号。
         if short_ma is None or long_ma is None:
             return []
         if abs(short_ma - long_ma) < self.min_ma_diff:
             return []
 
         now = tick.ts
-        # 冷却过滤：防止在短时间内连续发单
+        # 冷却过滤 (Cool-down)：
+        # 防止在短时间内对同一信号连续发单（虽然 ClientOrderId 可以去重，但策略层应主动节制）。
+        # 例如网络延迟或数据抖动导致短时间内多次收到相似 Tick。
         if now and self.last_trade_ts is not None:
             delta = (now - self.last_trade_ts).total_seconds()
             if delta < self.cooldown_secs:
@@ -87,13 +91,18 @@ class SimpleMAStrategy(Strategy):
 
         signals: list[OrderSignal] = []
 
+        # 状态机逻辑 (State Machine)：
+        # 仅当信号发生翻转（Signal Flip）时才产生动作。
+        # 如果当前持有 Long 仓位 (last_signal="long") 且均线仍多头排列，则保持不动。
         if short_ma > long_ma and self.last_signal != "long":
-            # 金叉：短周期上穿长周期 -> 买入
+            # 金叉：短周期上穿长周期 -> 买入做多
             signals.append(OrderSignal(symbol=tick.symbol, side="buy", qty=0.0, reason="ma_cross_up"))
             self.last_signal = "long"
             self.last_trade_ts = now
         elif short_ma < long_ma and self.last_signal != "short":
-            # 死叉：短周期下穿长周期 -> 卖出
+            # 死叉：短周期下穿长周期 -> 卖出做空 (或平多反手)
+            # 注意：具体是平仓还是反手开空，取决于 Execution 层和 Config 的 mode (LongOnly vs LS)。
+            # 策略层只负责发出 "看空" 信号。
             signals.append(OrderSignal(symbol=tick.symbol, side="sell", qty=0.0, reason="ma_cross_down"))
             self.last_signal = "short"
             self.last_trade_ts = now
