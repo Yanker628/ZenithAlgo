@@ -4,3 +4,4 @@
 
 - `architecture.md`：当前实现的架构与分层
 - `backtest_logic.md`：回测数据流与口径说明
+- `sequence_diagram.md`：交易引擎时序图（实盘/纸盘 + 回测）
