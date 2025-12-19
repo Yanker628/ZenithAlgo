@@ -5,13 +5,14 @@ from __future__ import annotations
 import csv
 import itertools
 import random
+import pandas as pd
 from dataclasses import dataclass
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from engine.backtest_engine import BacktestEngine
-from engine.vector_backtest import run_ma_crossover_vectorized, run_trend_filtered_vectorized
+from engine.vector_backtest import run_ma_crossover_vectorized, run_trend_filtered_vectorized, _build_price_frame
 from shared.config.config_loader import BacktestConfig, StrategyConfig, load_config
 
 
@@ -109,6 +110,7 @@ def _run_single_combo(
     weights: dict | None,
     filters: dict | None = None,
     low_trades_penalty: float = 0.0,
+    price_df: pd.DataFrame | None = None,
 ) -> SweepResult:
     cfg = cfg_base.model_copy(deep=True) if hasattr(cfg_base, "model_copy") else deepcopy(cfg_base)
     bt_cfg = getattr(cfg, "backtest", None)
@@ -126,7 +128,7 @@ def _run_single_combo(
     strategy_type = str(getattr(bt_cfg.strategy, "type", "") or getattr(cfg.strategy, "type", ""))
     if use_vectorized:
         if strategy_type == "simple_ma":
-            vec = run_ma_crossover_vectorized(cfg)
+            vec = run_ma_crossover_vectorized(cfg, price_df=price_df)
             metrics = vec.metrics
         elif strategy_type == "trend_filtered":
             vec = run_trend_filtered_vectorized(cfg)
@@ -186,8 +188,18 @@ def grid_search(
     results: list[SweepResult] = []
     filter_stats: dict[str, int] = {"min_trades": 0, "max_drawdown": 0, "min_sharpe": 0, "passed": 0}
 
+    # Preload data for vectorization
+    price_df = None
+    bt_cfg = getattr(cfg, "backtest", None)
+    use_vectorized = bool(getattr(bt_cfg.sweep, "vectorized", True)) if bt_cfg and bt_cfg.sweep else True
+    if use_vectorized:
+        try:
+            price_df = _build_price_frame(cfg)
+        except Exception:
+            pass
+
     for combo in combos:
-        res = _run_single_combo(cfg_base, combo, objective_weights, filters, low_trades_penalty)
+        res = _run_single_combo(cfg_base, combo, objective_weights, filters, low_trades_penalty, price_df=price_df)
         results.append(res)
         reason = _filter_reason(res.metrics, filters)
         if reason is None:
@@ -241,8 +253,19 @@ def random_search(
 
     results: list[SweepResult] = []
     filter_stats: dict[str, int] = {"min_trades": 0, "max_drawdown": 0, "min_sharpe": 0, "passed": 0}
+
+    # Preload data for vectorization
+    price_df = None
+    bt_cfg = getattr(cfg, "backtest", None)
+    use_vectorized = bool(getattr(bt_cfg.sweep, "vectorized", True)) if bt_cfg and bt_cfg.sweep else True
+    if use_vectorized:
+        try:
+            price_df = _build_price_frame(cfg)
+        except Exception:
+            pass
+
     for combo in combos:
-        res = _run_single_combo(cfg_base, combo, objective_weights, filters, low_trades_penalty)
+        res = _run_single_combo(cfg_base, combo, objective_weights, filters, low_trades_penalty, price_df=price_df)
         results.append(res)
         reason = _filter_reason(res.metrics, filters)
         if reason is None:

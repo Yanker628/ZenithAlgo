@@ -32,6 +32,7 @@ def build_sizer(sizing_cfg: dict[str, Any] | None) -> Sizer:
     """
     from algo.sizing.fixed_notional import FixedNotionalSizer
     from algo.sizing.pct_equity import PctEquitySizer
+    from algo.sizing.fixed_qty import FixedQtySizer
 
     cfg = sizing_cfg or {}
     mode = str(cfg.get("type") or cfg.get("mode") or "").strip().lower()
@@ -40,6 +41,8 @@ def build_sizer(sizing_cfg: dict[str, Any] | None) -> Sizer:
         return FixedNotionalSizer(trade_notional=float(cfg.get("trade_notional", 0.0) or 0.0))
     if mode in {"pct_equity", "pct-equity", "position_pct", "position-pct"}:
         return PctEquitySizer(position_pct=float(cfg.get("position_pct", 0.0) or 0.0))
+    if mode in {"fixed_qty", "fixed-qty", "fixed"}:
+        return FixedQtySizer(qty=float(cfg.get("qty", 1.0) or 1.0))
 
     # fallback：都不指定时，交由上层兼容逻辑处理（这里给一个 no-op 占位）
     return NoopSizer()

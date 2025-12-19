@@ -155,7 +155,7 @@ class HistoricalDataLoader:
                     self.download_binance_klines(symbol, interval, start, min_start, path, overwrite=False)
                 if max_end < end:
                     self.download_binance_klines(symbol, interval, max_end, end, path, overwrite=False)
-        if not path.exists():
+        if not path.exists() and not self.store.parquet_path(symbol, interval).exists():
             raise FileNotFoundError(f"Kline file not found: {path}")
         return self.load_klines(symbol, interval, start, end)
 

@@ -1,0 +1,43 @@
+symbol: "SOLUSDT"
+timeframe: "1h"
+mode: "paper"
+equity_base: 10000
+
+exchange:
+  name: "binance"
+  base_url: "https://api.binance.com"
+  allow_live: false
+
+backtest:
+  data_dir: "dataset/history"
+  symbol: "SOLUSDT"
+  interval: "1h"
+  start: "2021-01-01T00:00:00Z"
+  end: "2024-01-01T00:00:00Z"
+  initial_equity: 10000
+
+  strategy:
+    type: "simple_ma"
+    params:
+      short_window: 10
+      long_window: 20
+      stop_loss: 0.05
+      take_profit: 0.10
+      min_ma_diff: 0.0
+
+  sizing:
+    type: "fixed_qty"
+    qty: 1.0
+
+  sweep:
+    enabled: true
+    mode: "grid"
+    vectorized: true
+    min_trades: 1
+    params:
+      short_window: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+      long_window: [60, 70, 80, 90, 100, 110, 120, 130, 140, 150]
+      stop_loss: [0.03, 0.05]
+      take_profit: [0.1, 0.2]
+    objective:
+      total_return_weight: 1.0

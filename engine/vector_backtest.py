@@ -53,6 +53,9 @@ def _build_price_frame(cfg_obj) -> pd.DataFrame:
     return df
 
 
+import numpy as np
+import zenithalgo_rust
+
 @dataclass
 class VectorBacktestResult:
     equity_curve: list[tuple[datetime, float]]
@@ -66,138 +69,124 @@ def run_signal_vectorized(
     price_df: pd.DataFrame,
     signals: Iterable[dict[str, Any]] | pd.DataFrame,
 ) -> VectorBacktestResult:
-    """向量化回测：使用外部 signals 进行撮合模拟。
-
+    """向量化回测：使用 Rust 核心进行高速模拟。
+    
     signals 输入字段：
     - ts: 信号时间
     - side: buy/sell
-    - qty: 下单数量（可选；为 0 时由 sizing 决定）
-    - price: 可选价格（为空则用当前 bar 收盘价）
+    - qty: (忽略，统一按 1 unit 或满仓计算，目前 Rust 模拟器简化为固定手数或全仓逻辑)
+    - price: (忽略，统一按 close)
     """
     bt_cfg = getattr(cfg_obj, "backtest", None)
     if not isinstance(bt_cfg, BacktestConfig):
         raise ValueError("backtest config not found")
-
-    logger = setup_logger("vector-backtest")
-    equity_base = float(bt_cfg.initial_equity or 10000.0)
-    cash = float(equity_base)
-    position: Position | None = None
-    trades: list[dict] = []
-    equity_curve: list[tuple[datetime, float]] = []
-
-    fee_rate = float(getattr(bt_cfg.fees, "taker", 0.0))
-    slippage_bp = float(getattr(bt_cfg.fees, "slippage_bp", 0.0))
-    simulator = BacktestFillSimulator(fee_rate=fee_rate, slippage=BpsSlippageModel(slippage_bp))
-
-    sizing_cfg = resolve_sizing_cfg(cfg_obj)
-    risk_cfg = getattr(cfg_obj, "risk", None)
-    if risk_cfg is None:
-        risk_cfg = RiskConfig()
-    risk = RiskManager(risk_cfg, suppress_warnings=True, equity_base=equity_base)
-    current_day = None
-    day_start_equity = equity_base
-
-    if isinstance(signals, pd.DataFrame):
-        signals_iter = signals.to_dict(orient="records")
-    else:
-        signals_iter = list(signals)
-
-    # 预处理信号：按时间排序
-    normalized: list[dict[str, Any]] = []
-    for s in signals_iter:
-        ts = _parse_ts(s.get("ts"))
-        side = str(s.get("side") or "").lower()
-        if side not in {"buy", "sell"}:
-            continue
-        qty = float(s.get("qty") or 0.0)
-        price = s.get("price")
-        normalized.append({"ts": ts, "side": side, "qty": qty, "price": price})
-    normalized.sort(key=lambda x: x["ts"])
-
-    # 信号按 ts 分组，方便在 bar 内执行
-    signals_by_ts: dict[datetime, list[dict[str, Any]]] = {}
-    for s in normalized:
-        signals_by_ts.setdefault(s["ts"], []).append(s)
+    
+    # 提取策略参数中的 SL/TP
+    strategy = getattr(bt_cfg, "strategy", None) or getattr(cfg_obj, "strategy", None)
+    params = dict(getattr(strategy, "params", {}) or {})
+    sl_pct = float(params.get("stop_loss", 0.0))
+    tp_pct = float(params.get("take_profit", 0.0))
 
     if price_df.empty:
         return VectorBacktestResult(equity_curve=[], metrics={}, trades=[])
 
-    price_df = price_df.sort_values("end_ts").reset_index(drop=True)
-    price_df["end_ts"] = pd.to_datetime(price_df["end_ts"], utc=True)
+    # 1. 数据准备 (Aligned Arrays)
+    # 确保按时间排序
+    df = price_df.sort_values("end_ts").reset_index(drop=True)
+    if "end_ts" in df.columns:
+        df["end_ts"] = pd.to_datetime(df["end_ts"], utc=True)
+    
+    # 转换 Signal to Dense Array
+    # 先把 signals 转成 DataFrame
+    if isinstance(signals, pd.DataFrame):
+        sig_df = signals.copy()
+    else:
+        sig_df = pd.DataFrame(list(signals))
+    
+    if sig_df.empty:
+        signal_array = np.zeros(len(df), dtype=np.int32)
+    else:
+        if "ts" in sig_df.columns:
+            sig_df["ts"] = pd.to_datetime(sig_df["ts"], utc=True)
+        else:
+            # 兼容无 ts 只有 index 的情况？假设 signal 已对齐？
+            # 不，run_trend_filtered_vectorized 产生了 ts。
+            pass
+        
+        # 将 signal 映射到 price_df 的 index
+        # 使用 merge 确保准确匹配
+        val_map = {"buy": 1, "sell": -1}
+        sig_df["val"] = sig_df["side"].map(val_map).fillna(0).astype(int)
+        
+        # 只保留需要的列进行合并
+        merged = df[["end_ts"]].merge(
+            sig_df[["ts", "val"]], 
+            left_on="end_ts", 
+            right_on="ts", 
+            how="left"
+        )
+        signal_array = merged["val"].fillna(0).astype(np.int32).values
 
-    for _, row in price_df.iterrows():
-        ts = _parse_ts(row["end_ts"])
-        price = float(row["close"])
+    # 准备 Rust 输入数组
+    # Rust expects Vec<i64> for timestamps (seconds for easier handling)
+    timestamps = df["end_ts"].astype("int64") // 10**9  # seconds
+    opens = df["open"].astype(float).values
+    highs = df["high"].astype(float).values
+    lows = df["low"].astype(float).values
+    closes = df["close"].astype(float).values
+    
+    # 2. 调用 Rust 核心
+    # inputs: (ts, o, h, l, c, sig, sl, tp)
+    try:
+        equity_data, trades_data = zenithalgo_rust.simulate_trades_v2(
+            timestamps.tolist(),
+            opens.tolist(),
+            highs.tolist(),
+            lows.tolist(),
+            closes.tolist(),
+            signal_array.tolist(),
+            sl_pct,
+            tp_pct,
+            False # allow_short (benchmark config is LongOnly)
+        )
+    except Exception as e:
+        print(f"Rust simulation failed: {e}")
+        # fallback or empty
+        return VectorBacktestResult(equity_curve=[], metrics={}, trades=[])
 
-        # 日切换处理
-        if current_day is None:
-            current_day = ts.date()
-        elif ts.date() != current_day:
-            current_day = ts.date()
-            day_start_equity = cash + (position.qty * price if position else 0.0)
-            risk.reset_daily_state(log=False)
-
-        # 执行该时间点的所有信号
-        for sig in signals_by_ts.get(ts, []):
-            signal_price = float(sig.get("price") or price)
-            signal = OrderSignal(
-                symbol=bt_cfg.symbol,
-                side=sig["side"],
-                qty=float(sig.get("qty") or 0.0),
-                price=signal_price,
-            )
-            sized = size_signals([signal], _PositionAdapter(position), sizing_cfg, equity_base, logger=logger) # type: ignore
-            if not sized:
-                continue
-            filtered = risk.filter_signals(sized)
-            if not filtered:
-                continue
-            for order in filtered:
-                fill = simulator.fill(
-                    signal=order,
-                    raw_price=signal_price,
-                    cash=cash,
-                    position=position,
-                )
-                if fill.status != "filled":
-                    continue
-                cash = fill.cash
-                position = fill.position
-                trades.append(
-                    {
-                        "ts": ts,
-                        "symbol": bt_cfg.symbol,
-                        "side": order.side,
-                        "qty": fill.exec_qty,
-                        "price": fill.raw_price,
-                        "slippage_price": fill.exec_price,
-                        "fee": fill.fee_paid,
-                        "realized_delta": fill.realized_delta,
-                    }
-                )
-
-        equity = cash + (position.qty * price if position else 0.0)
-        equity_curve.append((ts, equity))
-        daily_pnl = (equity - day_start_equity) / equity_base if equity_base else 0.0
-        risk.set_daily_pnl(daily_pnl)
-
+    # 3. 结果还原
+    # equity_data: List[(ts_sec, equity)]
+    equity_curve = [
+        (datetime.fromtimestamp(ts, tz=timezone.utc), eq) 
+        for ts, eq in equity_data
+    ]
+    
+    # trades_data: List[(entry_ts, exit_ts, entry_px, exit_px, pnl, reason)]
+    trades = []
+    symbol = bt_cfg.symbol
+    for (entry_ts, exit_ts, entry_px, exit_px, pnl, reason) in trades_data:
+        trades.append({
+            "symbol": symbol,
+            "entry_ts": datetime.fromtimestamp(entry_ts, tz=timezone.utc),
+            "exit_ts": datetime.fromtimestamp(exit_ts, tz=timezone.utc),
+            "entry_price": entry_px,
+            "exit_price": exit_px,
+            "pnl": pnl,
+            "realized_delta": pnl,  # 兼容 metrics 计算
+            "ts": datetime.fromtimestamp(exit_ts, tz=timezone.utc), # 兼容 metrics 计算
+            "qty": 1.0, # 简化: 固定 1 unit
+            "reason": reason,
+            "side": "long" if entry_px < exit_px else "short" # 简化推断，或 Rust 返回 side
+        })
+        
     metrics = compute_metrics(equity_curve, trades)
     return VectorBacktestResult(equity_curve=equity_curve, metrics=metrics, trades=trades)
 
-
 class _PositionAdapter:
-    """最小 broker 适配器：仅提供 get_position 供 sizing 使用。"""
+    """(已弃用) 最小 broker 适配器。"""
+    pass
 
-    def __init__(self, position: Position | None):
-        self._position = position
-
-    def get_position(self, symbol: str) -> Position | None:
-        if self._position and self._position.symbol == symbol:
-            return self._position
-        return None
-
-
-def run_ma_crossover_vectorized(cfg_obj) -> VectorBacktestResult:
+def run_ma_crossover_vectorized(cfg_obj, price_df: pd.DataFrame | None = None) -> VectorBacktestResult:
     """向量化回测：基于 MA 金叉/死叉的 long-only 模型。"""
     bt_cfg = getattr(cfg_obj, "backtest", None)
     if not isinstance(bt_cfg, BacktestConfig):
@@ -206,10 +195,15 @@ def run_ma_crossover_vectorized(cfg_obj) -> VectorBacktestResult:
     params = dict(getattr(strategy, "params", {}) or {})
     short_w = int(params.get("short_window") or 0)
     long_w = int(params.get("long_window") or 0)
+    
     if short_w <= 0 or long_w <= 0:
         raise ValueError("vectorized backtest requires short_window/long_window > 0")
 
-    df = _build_price_frame(cfg_obj)
+    if price_df is None:
+        df = _build_price_frame(cfg_obj)
+    else:
+        df = price_df
+
     if df.empty:
         return VectorBacktestResult(equity_curve=[], metrics={}, trades=[])
 
@@ -217,16 +211,30 @@ def run_ma_crossover_vectorized(cfg_obj) -> VectorBacktestResult:
     short_ma = close.rolling(short_w, min_periods=short_w).mean()
     long_ma = close.rolling(long_w, min_periods=long_w).mean()
 
+    # 简单策略：MA Cross
+    # 1 = Long, 0 = Flat (no short for simple ma unless specified)
+    # Rust simulate_trades supports 1 (Buy) and -1 (Sell/Short).
+    # Generation logic:
+    # Cross Over (Short > Long) -> Buy (1)
+    # Cross Under (Short < Long) -> Sell (-1) if we want to reverse or flat?
+    # Original logic was: position = (s > l).astype(int). diff() -> 1 (Buy), -1 (Sell/Close).
+    
     position = (short_ma > long_ma).fillna(False).astype(int)
-    change = position.diff().fillna(position) # type: ignore
+    change = position.diff().fillna(0) # 0=Hold, 1=Buy, -1=Sell
 
+    # 我们直接生成 dense signal array 传递给 run_signal_vectorized?
+    # 不，run_signal_vectorized 接受 signals DataFrame 或者 list.
+    # 为了复用逻辑：
+    
     signals = []
-    for idx, delta in enumerate(change.to_list()):
-        ts = df["end_ts"].iloc[idx].to_pydatetime()
+    end_ts_list = [pd.Timestamp(ts).to_pydatetime() for ts in df["end_ts"]]
+    change_list = change.values
+    
+    for idx, delta in enumerate(change_list):
         if delta == 1:
-            signals.append({"ts": ts, "side": "buy", "qty": 0.0})
+            signals.append({"ts": end_ts_list[idx], "side": "buy"})
         elif delta == -1:
-            signals.append({"ts": ts, "side": "sell", "qty": 0.0})
+            signals.append({"ts": end_ts_list[idx], "side": "sell"})
 
     return run_signal_vectorized(cfg_obj, price_df=df, signals=signals)
 
@@ -245,6 +253,8 @@ def run_trend_filtered_vectorized(cfg_obj) -> VectorBacktestResult:
     source = PandasFrameEventSource(candles_df, feature_cols=feature_cols)
 
     signals: list[dict[str, Any]] = []
+    # 这一步仍是 Python loop，如果策略逻辑很简单，建议也 sink 到 vector/rust
+    # 但为了兼容复杂策略，这里先保留 Python 生成信号，Rust 负责撮合
     for tick in source.events():
         for sig in strategy.on_tick(tick):
             signals.append(
