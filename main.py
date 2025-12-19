@@ -35,6 +35,7 @@ class CliArgs:
     min_trades: int = 10          # 最小交易次数限制
     output_dir: str = "results/walkforward_engine"
     include_live_tests: bool = False
+    report_dir: str | None = None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -89,6 +90,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="包含 @pytest.mark.live 测试（可能联网）",
     )
 
+    p_report = sub.add_parser("report", help="生成 HTML 报告")
+    p_report.add_argument("report_dir", type=str, help="结果目录 (results/...)")
+
     return parser
 
 
@@ -119,6 +123,7 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
         min_trades=int(getattr(ns, "min_trades", 10)),
         output_dir=str(getattr(ns, "output_dir", "results/walkforward_engine")),
         include_live_tests=bool(getattr(ns, "include_live", False)),
+        report_dir=getattr(ns, "report_dir", None),
     )
 
 
@@ -169,6 +174,16 @@ def main(argv: list[str] | None = None) -> Any:
         if not args.include_live_tests:
             pytest_args += ["-m", "not live"]
         return pytest.main(pytest_args)
+
+    # 6. report: 生成报告
+    if args.task == "report":
+        from analysis.reporting import ReportGenerator
+        if not args.report_dir:
+            raise ValueError("Must specify directory for report")
+        gen = ReportGenerator(args.report_dir)
+        path = gen.generate()
+        print(f"Report generated: {path}")
+        return
 
     raise ValueError(f"Unknown task: {args.task}")
 
