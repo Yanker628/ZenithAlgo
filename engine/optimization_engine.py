@@ -104,7 +104,8 @@ def _run_sweep_for_symbol(
             plots_dir = output_dir / "plots"
             plots_dir.mkdir(parents=True, exist_ok=True)
             heatmap_path = plots_dir / f"{stem}_heatmap.png"
-            plot_sweep_heatmap(output_csv, save_path=str(heatmap_path), filters=filters)
+            # 使用 max 聚合，因为同一个 cell 可能包含多个 param variant (e.g. slope/atr)，我们只关心该组能否跑出好结果（上限）
+            plot_sweep_heatmap(output_csv, save_path=str(heatmap_path), filters=filters, aggfunc="max")
         except Exception as exc:
             if logger is not None:
                 logger.warning("热力图生成失败，已跳过：%s", exc)

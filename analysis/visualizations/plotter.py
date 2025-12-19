@@ -147,6 +147,7 @@ def plot_sweep_heatmap(
     x_values: list | None = None,
     y_values: list | None = None,
     mask_filtered: bool = False,
+    aggfunc: str = "mean",
 ):
     """
     从 sweep CSV 生成参数-表现热力图。
@@ -167,6 +168,7 @@ def plot_sweep_heatmap(
         y_values=y_values,
         filters=filters,
         mask_filtered=mask_filtered,
+        aggfunc=aggfunc,
     )
     if pivot.empty or pivot.isna().all().all():
         return None
@@ -453,6 +455,7 @@ def _prepare_heatmap_pivot(
     y_values: list | None = None,
     filters: dict | None = None,
     mask_filtered: bool = False,
+    aggfunc: str = "mean",
 ):
     if x_param not in df.columns or y_param not in df.columns or value_param not in df.columns:
         raise ValueError(f"缺少必要列: {x_param}, {y_param}, {value_param}")
@@ -473,7 +476,7 @@ def _prepare_heatmap_pivot(
         if "min_sharpe" in filters and "sharpe" in df_plot.columns:
             df_plot = df_plot[df_plot["sharpe"] >= filters["min_sharpe"]]
 
-    pivot = df_plot.pivot_table(index=y_param, columns=x_param, values=value_param, aggfunc="mean")
+    pivot = df_plot.pivot_table(index=y_param, columns=x_param, values=value_param, aggfunc=aggfunc)
 
     try:
         import pandas as pd  # type: ignore
