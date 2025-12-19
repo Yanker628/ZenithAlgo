@@ -269,3 +269,123 @@ def run_trend_filtered_vectorized(cfg_obj) -> VectorBacktestResult:
     price_df = candles_df.rename(columns={"ts": "end_ts"}).copy()
     price_df["end_ts"] = pd.to_datetime(price_df["end_ts"], utc=True)
     return run_signal_vectorized(cfg_obj, price_df=price_df, signals=signals)
+
+
+def run_volatility_vectorized(cfg_obj, price_df: pd.DataFrame | None = None) -> VectorBacktestResult:
+    """向量化回测：波动率突破 (Bollinger Breakout)。"""
+    bt_cfg = getattr(cfg_obj, "backtest", None)
+    if not isinstance(bt_cfg, BacktestConfig):
+        raise ValueError("backtest config not found")
+    strategy = getattr(bt_cfg, "strategy", None) or getattr(cfg_obj, "strategy", None)
+    params = dict(getattr(strategy, "params", {}) or {})
+    
+    window = int(params.get("window") or 20)
+    k = float(params.get("k") or 2.0)
+    
+    if window <= 0:
+        raise ValueError("vectorized volatility requires window > 0")
+
+    if price_df is None:
+        df = _build_price_frame(cfg_obj)
+    else:
+        df = price_df
+
+    if df.empty:
+        return VectorBacktestResult(equity_curve=[], metrics={}, trades=[])
+
+    # Convert to list for Rust
+    closes = df["close"].astype(float).values.tolist()
+    
+    # Rust Calculation
+    try:
+        ma_vals = zenithalgo_rust.ma(closes, window)
+        std_vals = zenithalgo_rust.stddev(closes, window)
+    except Exception as e:
+        print(f"Rust indicator calc failed: {e}")
+        return VectorBacktestResult(equity_curve=[], metrics={}, trades=[])
+
+    # Convert back to Series for vectorized logic
+    ma_series = pd.Series(ma_vals, index=df.index)
+    std_series = pd.Series(std_vals, index=df.index)
+    
+    upper = ma_series + k * std_series
+    lower = ma_series - k * std_series
+    close_series = df["close"].astype(float)
+    
+    # Logic:
+    # Close > Upper -> Long (1)
+    # Close < Lower -> Short (-1) if allow_short, else Flat (0) or Short (-1)?
+    # For now, let's assume symmetry: Break Down = Short.
+    # Rust simulator "allow_short" flag controls if Short is actually taken.
+    # But generation logic here determines intent.
+    
+    # We want a state machine behavior:
+    # Flat -> Break Up -> Long
+    # Long -> Break Down? Or specific exit?
+    # Python Event strategy logic:
+    #   Entry: > Upper (Long), < Lower (Short)
+    #   Exit: < MA (Exit Long), > MA (Exit Short)
+    
+    # Developing vectorized state machine is complex without a loop or custom Rust sim.
+    # Simplified Vector Logic:
+    # Use "Signal" only on breakout.
+    # Let's map breakout directly to signals.
+    
+    # Breakout signals
+    long_signal = (close_series > upper)
+    short_signal = (close_series < lower)
+    
+    # Exit signals (Mean Reversion)
+    # exit_long = (close_series < ma_series)
+    # exit_short = (close_series > ma_series)
+    
+    # Construct a dense signal array?
+    # Or just generate entry signals and let Rust handle "Flip"?
+    # ZenithAlgo Rust Sim handles:
+    # Sig=1: if Flat -> Long. If Short -> Flip to Long.
+    # Sig=-1: if Flat -> Short. If Long -> Flip to Short.
+    # It doesn't natively handle "Exit Only" (Sig=0 is No Action).
+    
+    # So if we want to Exit on MA Cross, we need to pass specific "Close" intent?
+    # Currently Rust sim logic:
+    # if sig == 1: Long
+    # if sig == -1: Short
+    # 
+    # To support "Exit", we imply:
+    # Long -> wants to become Flat? 
+    # Rust sim doesn't explicitly support "Go Flat" command (except via SL/TP).
+    # This is a limitation of current `simulate_trades_v2`.
+    # 
+    # Workaround:
+    # For Strategy Parity with Event Engine (which has MA Exit), we should ideally upgrade Rust Sim later.
+    # For now, let's implement pure "Reversal" logic for Vector or simpler Stop/TP logic.
+    # Or, we only emit entry signals and rely on SL/TP for exit?
+    # 
+    # Let's align with the Python Event Strategy I wrote:
+    # Python Event: Long breaks Lower (Reversal)? No, Long exits on MA Cross.
+    # 
+    # Decision:
+    # For this iteration of Vector optimization, we can simplify:
+    # Only Entry Signals are passed. Exit is via SL/TP.
+    # Signals are generated only when breakout happens.
+    
+    signals = []
+    end_ts_list = [pd.Timestamp(ts).to_pydatetime() for ts in df["end_ts"]]
+    
+    # To reduce noise, only signal on crossover?
+    # Cross Over Upper
+    long_entry = (close_series > upper) & (close_series.shift(1) <= upper.shift(1))
+    short_entry = (close_series < lower) & (close_series.shift(1) >= lower.shift(1))
+    
+    # Iterate and build efficient list
+    # Use numpy for speed
+    long_idxs = np.where(long_entry)[0]
+    short_idxs = np.where(short_entry)[0]
+    
+    for idx in long_idxs:
+        signals.append({"ts": end_ts_list[idx], "side": "buy"})
+    
+    for idx in short_idxs:
+        signals.append({"ts": end_ts_list[idx], "side": "sell"})
+        
+    return run_signal_vectorized(cfg_obj, price_df=df, signals=signals)

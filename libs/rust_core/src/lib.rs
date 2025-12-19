@@ -169,6 +169,60 @@ fn atr(high: Vec<f64>, low: Vec<f64>, close: Vec<f64>, period: usize) -> PyResul
     Ok(rolling_mean(&tr, period))
 }
 
+/// 计算滚动标准差。
+/// - values: 输入序列
+/// - period: 周期长度（必须 > 0）
+#[pyfunction]
+fn stddev(values: Vec<f64>, period: usize) -> PyResult<Vec<f64>> {
+    if period == 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "period 必须大于 0",
+        ));
+    }
+    let n = values.len();
+    let mut out = vec![f64::NAN; n];
+    if n == 0 {
+        return Ok(out);
+    }
+    
+    // Welford's algorithm or Naive two-pass? 
+    // For simplicity and vector speed, let's use the naive rolling window sum of squares approach
+    // Var = E[X^2] - (E[X])^2
+    // But precision issues might arise.
+    // Let's stick to a simple loop for clarity and safety first.
+    
+    // Rolling variance
+    for i in 0..n {
+        if i + 1 >= period {
+            let slice = &values[i + 1 - period..=i];
+            let mut sum = 0.0;
+            let mut count = 0;
+            for v in slice {
+                if !is_nan(*v) {
+                    sum += v;
+                    count += 1;
+                }
+            }
+            if count > 0 {
+                let mean = sum / count as f64;
+                let mut sum_sq_diff = 0.0;
+                for v in slice {
+                    if !is_nan(*v) {
+                        sum_sq_diff += (v - mean).powi(2);
+                    }
+                }
+                // Sample standard deviation (divide by N-1, unless N=1)
+                if count > 1 {
+                    out[i] = (sum_sq_diff / (count as f64 - 1.0)).sqrt();
+                } else {
+                     out[i] = 0.0;
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// 计算 EMA（指数移动平均）。
 /// - values: 输入序列
 /// - period: 周期长度（必须 > 0）
@@ -366,6 +420,7 @@ fn zenithalgo_rust(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rsi, m)?)?;
     m.add_function(wrap_pyfunction!(atr, m)?)?;
     m.add_function(wrap_pyfunction!(ema, m)?)?;
+    m.add_function(wrap_pyfunction!(stddev, m)?)?;
     m.add_function(wrap_pyfunction!(simulate_trades_v2, m)?)?;
     Ok(())
 }

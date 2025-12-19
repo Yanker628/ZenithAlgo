@@ -1,7 +1,4 @@
-"""策略注册表：字符串 -> Strategy 实现。
-
-V2.3 约定：engine 只负责 orchestration，策略实例必须由配置驱动构建。
-"""
+"""策略注册表：字符串 -> Strategy 实现。"""
 
 from __future__ import annotations
 
@@ -12,6 +9,7 @@ from algo.strategy.base import Strategy
 from algo.strategy.simple_ma import SimpleMAStrategy
 from algo.strategy.trend_filter import TrendFilteredStrategy
 from algo.strategy.tick_scalper import TickScalper
+from algo.strategy.volatility import VolatilityBreakoutStrategy
 
 from shared.config.config_loader import StrategyConfig
 
@@ -77,3 +75,4 @@ def build_strategy(cfg: StrategyConfig | Mapping[str, Any] | None) -> Strategy:
 register_strategy("simple_ma", SimpleMAStrategy)
 register_strategy("trend_filtered", TrendFilteredStrategy)
 register_strategy("tick_scalper", TickScalper)
+register_strategy("volatility_breakout", VolatilityBreakoutStrategy)

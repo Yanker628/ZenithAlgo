@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from engine.backtest_engine import BacktestEngine
-from engine.vector_backtest import run_ma_crossover_vectorized, run_trend_filtered_vectorized, _build_price_frame
+from engine.vector_backtest import run_ma_crossover_vectorized, run_trend_filtered_vectorized, run_volatility_vectorized, _build_price_frame
 from shared.config.config_loader import BacktestConfig, StrategyConfig, load_config
 
 
@@ -132,6 +132,9 @@ def _run_single_combo(
             metrics = vec.metrics
         elif strategy_type == "trend_filtered":
             vec = run_trend_filtered_vectorized(cfg)
+            metrics = vec.metrics
+        elif strategy_type == "volatility_breakout":
+            vec = run_volatility_vectorized(cfg, price_df=price_df)
             metrics = vec.metrics
         else:
             summary = BacktestEngine(cfg_obj=cfg).run().summary
