@@ -103,9 +103,20 @@ def _run_sweep_for_symbol(
             stem = Path(output_csv).stem
             plots_dir = output_dir / "plots"
             plots_dir.mkdir(parents=True, exist_ok=True)
+            heatmap_cfg = sweep_cfg.heatmap or {}
+            x_param = str(heatmap_cfg.get("x", "short_window"))
+            y_param = str(heatmap_cfg.get("y", "long_window"))
+            
             heatmap_path = plots_dir / f"{stem}_heatmap.png"
             # 使用 max 聚合，因为同一个 cell 可能包含多个 param variant (e.g. slope/atr)，我们只关心该组能否跑出好结果（上限）
-            plot_sweep_heatmap(output_csv, save_path=str(heatmap_path), filters=filters, aggfunc="max")
+            plot_sweep_heatmap(
+                output_csv, 
+                save_path=str(heatmap_path), 
+                filters=filters, 
+                aggfunc="max",
+                x_param=x_param,
+                y_param=y_param
+            )
         except Exception as exc:
             if logger is not None:
                 logger.warning("热力图生成失败，已跳过：%s", exc)
@@ -149,7 +160,7 @@ class OptimizationEngine(BaseEngine):
         symbols = [str(s) for s in symbols_cfg] if symbols_cfg else [str(bt_cfg.symbol)]
         DatasetStore(bt_cfg.data_dir).ensure_meta_for_symbols(symbols, str(bt_cfg.interval))
 
-        base_out_dir = Path(self._artifacts_dir) if self._artifacts_dir is not None else Path("results") / "sweep_engine"
+        base_out_dir = Path(self._artifacts_dir) if self._artifacts_dir is not None else Path("results") / "sweep"
         base_out_dir.mkdir(parents=True, exist_ok=True)
 
         all_results: dict[str, list[dict[str, Any]]] = {}

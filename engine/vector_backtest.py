@@ -54,7 +54,7 @@ def _build_price_frame(cfg_obj) -> pd.DataFrame:
 
 
 import numpy as np
-import zenithalgo_rust
+from engine.simulation.rust_wrapper import RustSimulator
 
 @dataclass
 class VectorBacktestResult:
@@ -81,139 +81,21 @@ def run_signal_vectorized(
     if not isinstance(bt_cfg, BacktestConfig):
         raise ValueError("backtest config not found")
     
-    # 提取策略参数中的 SL/TP
+    
+    # 提取策略参数
     strategy = getattr(bt_cfg, "strategy", None) or getattr(cfg_obj, "strategy", None)
     params = dict(getattr(strategy, "params", {}) or {})
-    
-    # Priority: Fixed SL/TP > ATR Multiplier
-    # If Fixed SL is set, use it.
-    # If ATR Multiplier is set, use it (and set use_atr=True).
-    
-    fixed_sl = float(params.get("stop_loss", 0.0))
-    fixed_tp = float(params.get("take_profit", 0.0))
-    
-    atr_sl_mult = float(params.get("atr_stop_multiplier", 0.0))
-    atr_tp_mult = float(params.get("atr_tp_multiplier", 0.0)) # Not standard yet
-    
-    # Logic: If atr_stop_multiplier > 0, we use ATR mode for SL.
-    # But simulate_trades currently takes ONE mode for both SL and TP (implied by use_atr flag).
-    # So if ANY is ATR, we assume ATR mode.
-    # But wait, what if Mixed?
-    # Original Rust code: if use_atr { dist = entry_atr * sl_val } else { val = entry_price * (1-sl_val) }
-    # So we cannot mix Fixed SL and ATR TP easily without more complex Rust code.
-    # Given typical usage: Trend strategies use ATR. Reversion use Fixed.
-    # Let's decide mode based on atr_stop_multiplier.
-    
-    use_atr = False
-    sl_val = fixed_sl
-    tp_val = fixed_tp
-    
-    if atr_sl_mult > 0:
-        use_atr = True
-        sl_val = atr_sl_mult
-        # If using ATR for SL, we must use ATR for TP if we want TP?
-        # Or if tp_val is 0.0, it's fine.
-        # If fixed_tp > 0, we have a mismatch.
-        # For this task (Benchmark), we only use ATR Stop. TP is 0.
-        if fixed_tp > 0:
-             # Fallback/Warning: Cannot mix Fixed TP with ATR SL in this version.
-             # We prioritise ATR SL.
-             pass
-    
+
     if price_df.empty:
         return VectorBacktestResult(equity_curve=[], metrics={}, trades=[])
 
-    # 1. 数据准备 (Aligned Arrays)
-    # 确保按时间排序
-    df = price_df.sort_values("end_ts").reset_index(drop=True)
-    if "end_ts" in df.columns:
-        df["end_ts"] = pd.to_datetime(df["end_ts"], utc=True)
-    
-    # 转换 Signal to Dense Array
-    # 先把 signals 转成 DataFrame
-    if isinstance(signals, pd.DataFrame):
-        sig_df = signals.copy()
-    else:
-        sig_df = pd.DataFrame(list(signals))
-    
-    if sig_df.empty:
-        signal_array = np.zeros(len(df), dtype=np.int32)
-    else:
-        if "ts" in sig_df.columns:
-            sig_df["ts"] = pd.to_datetime(sig_df["ts"], utc=True)
-        else:
-            pass
-        
-        # 将 signal 映射到 price_df 的 index
-        val_map = {"buy": 1, "sell": -1}
-        sig_df["val"] = sig_df["side"].map(val_map).fillna(0).astype(int)
-        
-        # 只保留需要的列进行合并
-        merged = df[["end_ts"]].merge(
-            sig_df[["ts", "val"]], 
-            left_on="end_ts", 
-            right_on="ts", 
-            how="left"
-        )
-        signal_array = merged["val"].fillna(0).astype(np.int32).values
-
-    # 准备 Rust 输入数组
-    data_len = len(df)
-    timestamps = df["end_ts"].astype("int64") // 10**9  # seconds
-    opens = df["open"].astype(float).values
-    highs = df["high"].astype(float).values
-    lows = df["low"].astype(float).values
-    closes = df["close"].astype(float).values
-    
-    # ATR Calculation if needed
-    atr_values = []
-    if use_atr:
-        # Default ATR period = 14 ? Or from params?
-        atr_period = int(params.get("atr_period", 14))
-        try:
-            atr_values = zenithalgo_rust.atr(
-                highs.tolist(), 
-                lows.tolist(), 
-                closes.tolist(), 
-                atr_period
-            )
-            # Handle NaNs in Rust output (usually leading NaNs).
-            # Rust returns NaN for first period.
-            # Convert to float array, replace NaNs with 0.0 or first valid?
-            # Rust simulate_trades handles 0.0 (Stop distance 0 -> Exit immediately? No, wait)
-            # If ATR is NaN, current_atr is NaN. entry_atr is NaN.
-            # dist = NaN * mult = NaN.
-            # sl_price = entry - NaN = NaN.
-            # lo <= NaN is False.
-            # So if ATR is not ready, we have NO Stop Loss. This is safer than instant exit.
-            # But let's fill NaNs with 0.0 for safety.
-            atr_values = [0.0 if np.isnan(x) else x for x in atr_values]
-        except Exception as e:
-            print(f"Rust ATR calc failed: {e}")
-            use_atr = False # Fallback
-            sl_val = 0.0
-
-    if not use_atr:
-        atr_values = [0.0] * data_len
-
-    # 2. 调用 Rust 核心
+    # 2. 调用 Rust 核心 (Via Wrapper)
+    # Wrapper handles data alignment, signal prep, ATR calc, and simulation.
+    sim = RustSimulator()
     try:
-        equity_data, trades_data = zenithalgo_rust.simulate_trades(
-            timestamps.tolist(),
-            opens.tolist(),
-            highs.tolist(),
-            lows.tolist(),
-            closes.tolist(),
-            signal_array.tolist(),
-            sl_val,
-            tp_val,
-            False, # allow_short
-            use_atr,
-            atr_values
-        )
+        equity_data, trades_data = sim.simulate(price_df, signals, params)
     except Exception as e:
         print(f"Rust simulation failed: {e}")
-        # fallback or empty
         return VectorBacktestResult(equity_curve=[], metrics={}, trades=[])
 
     # 3. 结果还原
@@ -359,9 +241,10 @@ def run_volatility_vectorized(cfg_obj, price_df: pd.DataFrame | None = None) -> 
     closes = df["close"].astype(float).values.tolist()
     
     # Rust Calculation
+    sim = RustSimulator()
     try:
-        ma_vals = zenithalgo_rust.ma(closes, window)
-        std_vals = zenithalgo_rust.stddev(closes, window)
+        ma_vals = sim.calculate_indicators(closes, "ma", window)
+        std_vals = sim.calculate_indicators(closes, "stddev", window)
     except Exception as e:
         print(f"Rust indicator calc failed: {e}")
         return VectorBacktestResult(equity_curve=[], metrics={}, trades=[])
