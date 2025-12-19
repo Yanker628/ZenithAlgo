@@ -138,7 +138,7 @@ def run_signal_vectorized(
     # 2. 调用 Rust 核心
     # inputs: (ts, o, h, l, c, sig, sl, tp)
     try:
-        equity_data, trades_data = zenithalgo_rust.simulate_trades_v2(
+        equity_data, trades_data = zenithalgo_rust.simulate_trades(
             timestamps.tolist(),
             opens.tolist(),
             highs.tolist(),

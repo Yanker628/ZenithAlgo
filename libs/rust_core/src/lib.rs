@@ -255,7 +255,7 @@ fn ema(values: Vec<f64>, period: usize) -> PyResult<Vec<f64>> {
 /// equity_curve: Vec<(ts, equity)>
 /// trades_list: Vec<(entry_ts, exit_ts, entry_price, exit_price, pnl, reason)>
 #[pyfunction]
-fn simulate_trades_v2(
+fn simulate_trades(
     timestamps: Vec<i64>,
     opens: Vec<f64>,
     highs: Vec<f64>,
@@ -328,7 +328,7 @@ fn simulate_trades_v2(
                     reason = "sl".to_string();
                     triggered = true;
                 } else if lo <= tp_price {
-                    // TP Hit
+                     // TP Hit
                     exit_price = if op < tp_price { op } else { tp_price };
                     reason = "tp".to_string();
                     triggered = true;
@@ -347,31 +347,6 @@ fn simulate_trades_v2(
         }
 
         // 2. 处理新信号 (Signal Execution)
-        // 如果当前是 Flat，检查是否开仓
-        // 如果当前有持仓，检查是否反转 (Flip)
-        // 假设信号在 Close 时产生，下一个 Bar Open 执行？或者 Current Bar Close 执行？
-        // Vector backtest 常用逻辑：Signal at i, Execute at i (Close) or i+1 (Open).
-        // 这里为了简化且符合 bar 内撮合逻辑，假设：信号基于 Close 计算，在 NEXT BAR Open 执行？
-        // 但这里的输入是 aligned arrays。通常 signal[i] 意味着在 time i 产生的信号。
-        // 如果我们要在 time i 执行，意味着我们用 close[i] 成交？
-        // 
-        // 既然要做“Intra-bar SL/TP”，通常意味着 Entry 是在 Previous Bar Close 或 Current Bar Open。
-        // 为了最快模拟，我们假设：
-        // Signal[i] 导致在 Close[i] 成交 (简化) 或者我们模拟的是基于 i-1 的信号在 i 的行为？
-        // 
-        // User request: "传入 (timestamp, ..., signal, ...) ... O(N) loop".
-        // 让我们假设 signal[i] 是策略在 i 时刻给出的指令。
-        // 如果我们想在 i 时刻就进行 SL/TP 检查，那必须是 i-1 时刻建立的仓位。
-        // 
-        // 逻辑修正：
-        // Loop i:
-        //   First: Check intra-bar SL/TP for EXISTING position (from i-1).
-        //   Second: Process Signal[i] to Update position for NEXT step (or Close execute now).
-        //   If Signal[i] says Buy and we are Flat -> Open Long at Close[i].
-        //   If Signal[i] says Sell and we are Long -> Close Long at Close[i].
-        //   
-        // 这样 SL/TP 会在 持仓后的 每一个 Bar (i+1...) 进行检查。
-        
         // 处理信号
         if sig != 0 {
              // 简化：全部按 Close 价成交
@@ -421,6 +396,6 @@ fn zenithalgo_rust(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(atr, m)?)?;
     m.add_function(wrap_pyfunction!(ema, m)?)?;
     m.add_function(wrap_pyfunction!(stddev, m)?)?;
-    m.add_function(wrap_pyfunction!(simulate_trades_v2, m)?)?;
+    m.add_function(wrap_pyfunction!(simulate_trades, m)?)?;
     Ok(())
 }

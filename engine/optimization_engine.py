@@ -138,8 +138,11 @@ class OptimizationEngine(BaseEngine):
 
         sweep_cfg = bt_cfg.sweep
         if sweep_cfg is None or not sweep_cfg.enabled:
+            logger.info("Using Engine: BacktestEngine (Standard)")
             summary = BacktestEngine(cfg_path=self._cfg_path).run().summary
             return EngineResult(summary=summary)
+        
+        logger.info("Using Engine: OptimizationEngine (Sweep Mode)")
 
         symbols_cfg = bt_cfg.symbols
         symbols = [str(s) for s in symbols_cfg] if symbols_cfg else [str(bt_cfg.symbol)]
