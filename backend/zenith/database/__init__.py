@@ -1,3 +1,5 @@
 """Database package for ZenithAlgo."""
 
-__all__: list[str] = []
+from .backtest_db import BacktestDatabase
+
+__all__ = ['BacktestDatabase']

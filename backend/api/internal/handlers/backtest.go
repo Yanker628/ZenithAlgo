@@ -107,7 +107,7 @@ func (h *BacktestHandler) GetTrades(c *gin.Context) {
 		"backtest_id": id,
 		"symbol":      result.Symbol,
 		"total":       len(trades),
-		"trades":      trades,
+		"trades":      trades, // Already includes pnl, commission, cumulative_pnl from DB
 	})
 }
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import {
   LineChart,
   Line,
@@ -12,7 +13,7 @@ import {
 } from "recharts";
 
 interface EquityPoint {
-  timestamp: string;
+  timestamp: Date;
   equity: number;
 }
 
@@ -22,20 +23,31 @@ interface EquityCurveProps {
 }
 
 export function EquityCurve({ data, title = "收益曲线" }: EquityCurveProps) {
+  // Transform data for chart - memoized to prevent re-calculation
+  const chartData = useMemo(() => 
+    data.map(d => ({
+      date: d.timestamp instanceof Date ? d.timestamp.toISOString().split('T')[0] : d.timestamp,
+      equity: d.equity
+    })),
+    [data]
+  );
+
   return (
     <div className="w-full">
       <h3 className="text-lg font-semibold mb-4">{title}</h3>
       <ResponsiveContainer width="100%" height={300}>
-        <LineChart data={data}>
+        <LineChart data={chartData}>
           <CartesianGrid strokeDasharray="3 3" className="stroke-slate-200 dark:stroke-slate-700" />
           <XAxis
-            dataKey="timestamp"
+            dataKey="date"
             tick={{ fontSize: 12 }}
             className="text-slate-600 dark:text-slate-400"
           />
           <YAxis
             tick={{ fontSize: 12 }}
             className="text-slate-600 dark:text-slate-400"
+            domain={[(dataMin: number) => Math.floor(dataMin - 10), (dataMax: number) => Math.ceil(dataMax + 10)]}
+            tickFormatter={(value) => Math.round(value).toString()}
           />
           <Tooltip
             contentStyle={{

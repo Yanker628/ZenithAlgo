@@ -1,8 +1,10 @@
 """Helper utilities for saving experiment results to PostgreSQL database."""
 
+import os
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
+from zenith.database import BacktestDatabase
 
 def save_sweep_results_to_db(
     sweep_csv_path: str,
@@ -32,12 +34,10 @@ def save_sweep_results_to_db(
     
     # Initialize database
     try:
-        from zenith.database.backtest_db import BacktestDatabase
         db = BacktestDatabase()
     except Exception as e:
-        if verbose:
-            print(f"⚠️  Database module unavailable or connection failed: {e}")
-            print("   Results saved to CSV only (database skipped)")
+        print(f"⚠️  Database connection failed: {e}")
+        print("   Results saved to CSV only (database skipped)")
         return 0
     
     saved_count = 0

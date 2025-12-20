@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
   TableBody,
@@ -13,20 +14,25 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { EquityCurve } from "@/components/charts/EquityCurve";
+import { TradesTable } from "@/components/charts/TradesTable";
 import {
   loadSweepResults,
   loadEquityCurve,
+  loadTrades,
   BacktestResult,
   EquityPoint,
+  Trade,
 } from "@/utils/dataLoader";
 
 export default function BacktestPage() {
   const [results, setResults] = useState<BacktestResult[]>([]);
   const [equityCurve, setEquityCurve] = useState<EquityPoint[]>([]);
+  const [trades, setTrades] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [selectedSymbol, setSelectedSymbol] = useState<string>("全部");
   const [loadingCurve, setLoadingCurve] = useState(false);
+  const [loadingTrades, setLoadingTrades] = useState(false);
 
   useEffect(() => {
     async function loadData() {
@@ -43,14 +49,20 @@ export default function BacktestPage() {
           setSelectedIndex(0);
           setSelectedSymbol(firstResult.symbol);
           
-          // Try to load equity for first result
-          const firstEquity = await loadEquityCurve(firstResult.id);
+          // Try to load equity and trades for first result
+          const [firstEquity, firstTrades] = await Promise.all([
+            loadEquityCurve(firstResult.id),
+            loadTrades(firstResult.id),
+          ]);
+          
           if (firstEquity.length > 0) {
             setEquityCurve(firstEquity);
           } else {
             // If first doesn't have equity, use fallback
             setEquityCurve(equityData);
           }
+          
+          setTrades(firstTrades);
         } else {
           setEquityCurve(equityData);
         }
@@ -67,20 +79,27 @@ export default function BacktestPage() {
     setSelectedIndex(index);
     setSelectedSymbol(result.symbol);
     setLoadingCurve(true);
+    setLoadingTrades(true);
     
     try {
-      // Load equity curve for the selected result
-      const equityData = await loadEquityCurve(result.id);
+      // Load equity curve and trades concurrently
+      const [equityData, tradesData] = await Promise.all([
+        loadEquityCurve(result.id),
+        loadTrades(result.id),
+      ]);
+      
       if (equityData.length > 0) {
         setEquityCurve(equityData);
       } else {
-        // Show message if no equity available
         console.warn(`No equity data for ${result.id}`);
       }
+      
+      setTrades(tradesData);
     } catch (error) {
-      console.error("Failed to load curve for selected result:", error);
+      console.error("Failed to load data for selected result:", error);
     } finally {
       setLoadingCurve(false);
+      setLoadingTrades(false);
     }
   };
 
@@ -96,10 +115,44 @@ export default function BacktestPage() {
     );
   }
 
-  // Calculate metrics
-  const maxReturn = Math.max(...results.map(r => r.metrics.total_return || 0));
-  const maxSharpe = Math.max(...results.map(r => r.metrics.sharpe || 0));
-  const minDrawdown = Math.min(...results.map(r => r.metrics.max_drawdown || 0));
+  // Calculate metrics safely
+  const hasData = results.length > 0;
+  const maxReturn = hasData ? Math.max(...results.map(r => r.metrics.total_return || 0)) : 0;
+  const maxSharpe = hasData ? Math.max(...results.map(r => r.metrics.sharpe || 0)) : 0;
+  const minDrawdown = hasData ? Math.min(...results.map(r => r.metrics.max_drawdown || 0)) : 0;
+
+  // Empty state
+  if (!hasData) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900">
+        <div className="container mx-auto p-8">
+          <header className="mb-8">
+            <h1 className="text-4xl font-bold mb-2">回测结果</h1>
+            <p className="text-slate-600 dark:text-slate-400">
+              策略性能分析与参数对比
+            </p>
+          </header>
+
+          <Card className="p-12 text-center">
+            <div className="max-w-md mx-auto">
+              <div className="text-6xl mb-4">📊</div>
+              <h2 className="text-2xl font-semibold mb-4">暂无回测数据</h2>
+              <p className="text-slate-600 dark:text-slate-400 mb-6">
+                数据库中还没有回测结果。运行参数扫描后，结果会自动显示在这里。
+              </p>
+              <div className="bg-slate-100 dark:bg-slate-800 rounded-lg p-4 text-left">
+                <p className="font-mono text-sm mb-2">运行 sweep 生成数据：</p>
+                <code className="block bg-slate-900 dark:bg-slate-950 text-green-400 p-3 rounded">
+                  cd backend<br/>
+                  uv run python main.py sweep --config config/config.yml
+                </code>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900">
@@ -114,23 +167,52 @@ export default function BacktestPage() {
           </p>
         </header>
 
-        {/* 收益曲线 */}
+        {/* 数据展示 Tabs */}
         <Card className="p-6 mb-8">
-          {loadingCurve ? (
-            <Skeleton className="h-64 w-full" />
-          ) : (
-            <>
+          <Tabs defaultValue="equity" className="w-full">
+            <TabsList className="grid w-full grid-cols-2 mb-4">
+              <TabsTrigger value="equity">收益曲线</TabsTrigger>
+              <TabsTrigger value="trades">
+                交易记录 {trades.length > 0 && `(${trades.length})`}
+              </TabsTrigger>
+            </TabsList>
+            
+            <TabsContent value="equity">
+              {loadingCurve ? (
+                <Skeleton className="h-64 w-full" />
+              ) : equityCurve.length > 0 ? (
+                <>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold">收益曲线</h3>
+                    {selectedIndex !== null && (
+                      <Badge variant="outline">
+                        当前查看: #{selectedIndex + 1} 排名
+                      </Badge>
+                    )}
+                  </div>
+                  <EquityCurve data={equityCurve} title="" />
+                </>
+              ) : (
+                <div className="flex flex-col items-center justify-center h-64 text-slate-500">
+                  <div className="text-4xl mb-3">📈</div>
+                  <p>该回测无收益曲线数据</p>
+                  <p className="text-sm mt-2">仅存储了摘要指标</p>
+                </div>
+              )}
+            </TabsContent>
+            
+            <TabsContent value="trades">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold">收益曲线</h3>
+                <h3 className="text-lg font-semibold">交易详情</h3>
                 {selectedIndex !== null && (
                   <Badge variant="outline">
                     当前查看: #{selectedIndex + 1} 排名
                   </Badge>
                 )}
               </div>
-              <EquityCurve data={equityCurve} title="" />
-            </>
-          )}
+              <TradesTable trades={trades} loading={loadingTrades} />
+            </TabsContent>
+          </Tabs>
         </Card>
 
         {/* 性能指标卡片 */}
@@ -197,17 +279,12 @@ export default function BacktestPage() {
                       }`}
                     >
                       <TableCell>
-                        <div className="flex items-center gap-2">
-                          <Badge
-                            variant={index === 0 ? "default" : "secondary"}
-                            className={index === 0 ? "bg-yellow-500" : ""}
-                          >
-                            #{index + 1}
-                          </Badge>
-                          {result.id && result.id.includes("equity") && (
-                            <span className="text-xs text-green-600">📊</span>
-                          )}
-                        </div>
+                        <Badge
+                          variant={index === 0 ? "default" : "secondary"}
+                          className={index === 0 ? "bg-yellow-500" : ""}
+                        >
+                          #{index + 1}
+                        </Badge>
                       </TableCell>
                       <TableCell className="font-medium">
                         {result.symbol}

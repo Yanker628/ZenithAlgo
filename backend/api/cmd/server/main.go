@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/zenithalgo/api/internal/database"
 	"github.com/zenithalgo/api/internal/handlers"
+	"github.com/zenithalgo/api/internal/middleware"
 	"github.com/zenithalgo/api/internal/services"
 )
 
@@ -28,8 +29,8 @@ func main() {
 	// Setup router
 	router := gin.Default()
 
-	// TODO: Add CORS middleware if needed
-	// router.Use(middleware.CORSMiddleware())
+	// Apply CORS middleware
+	router.Use(middleware.SetupCORS())
 
 	// API routes
 	api := router.Group("/api")

@@ -15,17 +15,21 @@ export interface BacktestResult {
 }
 
 export interface EquityPoint {
-  timestamp: string;
+  timestamp: Date;
   equity: number;
+  drawdown?: number;
+  drawdown_pct?: number;
 }
 
 export interface Trade {
-  timestamp: string;
+  timestamp: Date;
   symbol: string;
   side: string;
   price: number;
   qty: number;
   pnl?: number;
+  commission?: number;
+  cumulative_pnl?: number;
 }
 
 const API_BASE_URL = "http://localhost:8080/api";
@@ -104,8 +108,10 @@ export async function loadEquityCurve(backtestId?: string): Promise<EquityPoint[
         const data = await response.json();
         if (data.data && Array.isArray(data.data)) {
           return data.data.map((point: any) => ({
-            timestamp: new Date(point.timestamp).toISOString().split('T')[0],
+            timestamp: new Date(point.timestamp),
             equity: point.equity,
+            drawdown: point.drawdown,
+            drawdown_pct: point.drawdown_pct,
           }));
         }
       }
@@ -136,7 +142,7 @@ async function loadEquityCurveFromCSV(): Promise<EquityPoint[]> {
           const processed: EquityPoint[] = data
             .filter((row) => row.ts && row.equity !== undefined)
             .map((row) => ({
-              timestamp: new Date(row.ts).toISOString().split('T')[0],
+              timestamp: new Date(row.ts),
               equity: row.equity,
             }));
           resolve(processed);
@@ -151,56 +157,44 @@ async function loadEquityCurveFromCSV(): Promise<EquityPoint[]> {
 }
 
 /**
- * 从 Go API 加载交易记录
+ * 加载交易记录数据
+ * @param backtestId - 回测ID（可选，如果提供则从API加载）
+ * @returns 交易记录数组
  */
 export async function loadTrades(backtestId?: string): Promise<Trade[]> {
-  // TODO: 等 Go API 实现 trades endpoint 后启用
-  // if (backtestId) {
-  //   try {
-  //     const response = await fetch(`${API_BASE_URL}/backtest/${backtestId}/trades`);
-  //     if (response.ok) {
-  //       const data = await response.json();
-  //       return data.trades || [];
-  //     }
-  //   } catch (error) {
-  //     console.error("Failed to load trades from API:", error);
-  //   }
-  // }
-  
-  // Fallback to CSV
-  return loadTradesFromCSV();
-}
+  // 如果提供了 backtestId，尝试从 API 加载
+  if (backtestId) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/backtest/${backtestId}/trades`);
+      if (response.ok) {
+        const data = await response.json();
+        return data.trades || [];
+      }
+    } catch (error) {
+      console.warn(`Failed to load trades from API for ${backtestId}:`, error);
+    }
+  }
 
-/**
- * 从静态 CSV 文件加载交易记录
- */
-async function loadTradesFromCSV(): Promise<Trade[]> {
+  // 降级：从本地 CSV 加载
   try {
-    const response = await fetch('/data/trades.csv');
-    const csvText = await response.text();
-
-    return new Promise((resolve, reject) => {
-      Papa.parse(csvText, {
-        header: true,
-        dynamicTyping: true,
-        skipEmptyLines: true,
-        complete: (results) => {
-          const data = results.data as any[];
-          const processed: Trade[] = data
-            .filter((row) => row.timestamp)
-            .map((row) => ({
-              timestamp: row.timestamp,
-              symbol: row.symbol || "",
-              side: row.side || "",
-              price: row.price || 0,
-              qty: row.qty || 0,
-              pnl: row.pnl,
-            }));
-          resolve(processed);
-        },
-        error: (error: any) => reject(error),
-      });
+    const response = await fetch("/data/trades.csv");
+    const text = await response.text();
+    const parsed = Papa.parse<Record<string, string>>(text, {
+      header: true,
+      dynamicTyping: true,
+      skipEmptyLines: true,
     });
+
+    return parsed.data.map((row) => ({
+      timestamp: new Date(row.ts || row.timestamp),
+      symbol: row.symbol || "",
+      side: row.side || "",
+      price: parseFloat(row.price) || 0,
+      qty: parseFloat(row.qty) || 0,
+      pnl: row.pnl ? parseFloat(row.pnl) : undefined,
+      commission: row.commission ? parseFloat(row.commission) : undefined,
+      cumulative_pnl: row.cumulative_pnl ? parseFloat(row.cumulative_pnl) : undefined,
+    }));
   } catch (error) {
     console.error("Failed to load trades:", error);
     return [];
@@ -236,7 +230,7 @@ export function generateMockData() {
     const change = (Math.random() - 0.45) * 100;
     equity += change;
     equityCurve.push({
-      timestamp: date.toISOString().split("T")[0],
+      timestamp: date,
       equity: Math.round(equity * 100) / 100,
     });
   }

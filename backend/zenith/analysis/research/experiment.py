@@ -360,7 +360,67 @@ def run_backtest_experiment(cfg_path: str) -> ExperimentResult:
     )
     write_summary_md(out_dir / "summary.md", task="backtest", meta=meta, metrics=metrics, plots=[str(out_dir / "equity.png")])
     logger.info("Experiment saved: %s", out_dir)
-    return ExperimentResult(task="backtest", meta=meta, metrics=metrics, artifacts=artifacts)
+
+    # 8) 保存到 PostgreSQL
+    try:
+        from zenith.database import BacktestDatabase
+        import pandas as pd
+        
+        db = BacktestDatabase()
+        sym = str(meta["symbol"])
+        
+        # 读取 equity 和 trades CSV
+        equity_file = out_dir / "equity.csv"
+        trades_file = out_dir / "trades.csv"
+        
+        equity_df = None
+        trades_df = None
+        
+        if equity_file.exists():
+            try:
+                equity_df = pd.read_csv(equity_file)
+                logger.info("Loaded equity curve: %d points", len(equity_df))
+            except Exception as e:
+                logger.warning("Failed to load equity.csv: %s", e)
+        
+        if trades_file.exists():
+            try:
+                trades_df = pd.read_csv(trades_file)
+                logger.info("Loaded trades: %d trades", len(trades_df))
+            except Exception as e:
+                logger.warning("Failed to load trades.csv: %s", e)
+        
+        backtest_id = db.save_backtest(
+            run_id=out_dir.name,
+            symbol=sym,
+            timeframe=str(meta["interval"]),
+            start_date=_parse_dt(str(meta.get("start"))),
+            end_date=_parse_dt(str(meta.get("end"))),
+            strategy_name=cfg.strategy.type if hasattr(cfg, "strategy") and hasattr(cfg.strategy, "type") else "unknown",
+            params=cfg.strategy.model_dump() if hasattr(cfg, "strategy") and hasattr(cfg.strategy, "model_dump") else {},
+            metrics=metrics,
+            equity_curve=equity_df,
+            trades=trades_df,
+            score=metrics.get("sharpe", 0.0),
+            passed=True,
+        )
+        
+        db.close()
+        logger.info("✅ Saved to PostgreSQL (backtest_id=%d, equity=%s, trades=%s)", 
+                   backtest_id,
+                   f"{len(equity_df)} points" if equity_df is not None else "None",
+                   f"{len(trades_df)} trades" if trades_df is not None else "None")
+    except Exception as e:
+        logger.warning("Failed to save to database: %s", e)
+        import traceback
+        traceback.print_exc()
+
+    return ExperimentResult(
+        task="backtest",
+        meta=meta,
+        metrics=metrics, # Use the original metrics variable
+        artifacts=artifacts,
+    )
 
 
 def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
