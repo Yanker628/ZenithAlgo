@@ -52,6 +52,9 @@ class CliArgs:
     
     # Vector args
     vector_strategy: str = "volatility"
+    
+    # Worker args
+    redis_url: str = "redis://localhost:6379/0"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -123,6 +126,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_vec = sub.add_parser("vector", help="快速向量化回测 (Rust)")
     _add_config_arg(p_vec, default=argparse.SUPPRESS)
     p_vec.add_argument("--strategy", default="volatility", dest="vector_strategy")
+    
+    # 10. Worker (RaaS)
+    p_worker = sub.add_parser("worker", help="启动 RaaS Worker (Redis Consumer)")
+    p_worker.add_argument("--redis-url", default="redis://localhost:6379/0")
 
     return parser
 
@@ -159,6 +166,7 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
         year=getattr(ns, "year", None),
         verify_target=getattr(ns, "verify_target", "parity"),
         vector_strategy=getattr(ns, "vector_strategy", "volatility"),
+        redis_url=getattr(ns, "redis_url", "redis://localhost:6379/0"),
     )
 
 
@@ -276,6 +284,15 @@ def main(argv: list[str] | None = None) -> Any:
         print(f"Sharpe: {res.metrics.get('sharpe', 0.0):.4f}")
         print(f"Total Return: {res.metrics.get('total_return', 0.0):.2%}")
         return
+
+    # 10. Worker
+    if args.task == "worker":
+        from zenith.core.worker import JobConsumer
+        print(f"--- Starting Worker (Redis: {args.redis_url}) ---")
+        JobConsumer(redis_url=args.redis_url).run_forever()
+        return
+
+    raise ValueError(f"Unknown task: {args.task}")
 
     raise ValueError(f"Unknown task: {args.task}")
 

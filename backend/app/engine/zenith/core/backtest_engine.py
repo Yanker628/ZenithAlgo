@@ -176,7 +176,7 @@ class BacktestEngine(BaseEngine):
         self.broker: BacktestBroker | None = None
         self.last_prices: dict[str, float] = {}
 
-    def run(self) -> EngineResult:
+    def run(self, progress_callback=None) -> EngineResult:
         cfg = self._load_cfg()
         backtest_config = self._load_bt_cfg(cfg)  # 重命名 bt_cfg -> backtest_config 以提高可读性
         logger = setup_logger("backtest")
@@ -190,6 +190,7 @@ class BacktestEngine(BaseEngine):
         # 加载数据与特征 (Data Loading)
         candles_df, feature_cols, data_health_raw = self._load_candles_and_features(cfg, backtest_config)
         data_health = DataHealth.model_validate(data_health_raw)
+        total_bars = len(candles_df)
 
         # 构建核心组件 (Build Core Components)
         strategy = self._build_strategy(cfg, backtest_config)
@@ -204,11 +205,14 @@ class BacktestEngine(BaseEngine):
         current_day: date | None = None
         day_start_equity = equity_base
         signal_trace = SignalTrace()
+        
+        bars_processed = 0
 
         # 定义逐 Tick 处理逻辑 (Event Handler)
         def _on_tick(tick: Tick) -> None:
-            nonlocal last_ts, current_day, day_start_equity
+            nonlocal last_ts, current_day, day_start_equity, bars_processed
             last_ts = tick.ts
+            bars_processed += 1
 
             # 1. 每日结算检查 (Daily Roll)
             # 如果日期变更，重置当日 PnL 统计，并更新当日起始权益，用于风控计算（如日内最大亏损）
@@ -221,6 +225,25 @@ class BacktestEngine(BaseEngine):
                 equity_base=equity_base,
                 day_start_equity=day_start_equity,
             )
+            
+            # Progress Callback (Daily or every N ticks)
+            # 这里简单起见，利用每日结算的时机（current_day 变更时 _maybe_roll_day 内部其实没给信号），
+            # 或者简单地每 1% 进度汇报一次。为了平滑，这里每 1000 ticks 汇报一次。
+            if progress_callback and bars_processed % 1000 == 0:
+                 progress = bars_processed / total_bars if total_bars > 0 else 0.0
+                 est_equity = _compute_equity(broker)
+                 state = {
+                     "ts": tick.ts.isoformat(),
+                     "equity": est_equity,
+                     "unrealized": broker.unrealized_pnl,
+                     "cash": broker.cash,
+                     "bars": bars_processed,
+                     "total_bars": total_bars
+                 }
+                 try:
+                    progress_callback(progress, state)
+                 except Exception:
+                    pass
 
             # 2. 更新最新价格 (Market Data Update)
             last_prices[tick.symbol] = tick.price
