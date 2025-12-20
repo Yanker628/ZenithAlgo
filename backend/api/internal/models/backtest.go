@@ -101,7 +101,7 @@ type Trade struct {
 	Side          string    `json:"side" db:"side"`
 	Price         float64   `json:"price" db:"price"`
 	Qty           float64   `json:"qty" db:"qty"`
-	PnL           *float64  `json:"pnl,omitempty" db:"pnl"`
-	Commission    *float64  `json:"commission,omitempty" db:"commission"`
-	CumulativePnL *float64  `json:"cumulative_pnl,omitempty" db:"cumulative_pnl"`
+	PnL           *float64  `json:"pnl" db:"pnl"`
+	Commission    *float64  `json:"commission" db:"commission"`
+	CumulativePnL *float64  `json:"cumulative_pnl" db:"cumulative_pnl"`
 }

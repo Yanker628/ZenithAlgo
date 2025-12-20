@@ -177,7 +177,7 @@ export default function BacktestPage() {
               </TabsTrigger>
             </TabsList>
             
-            <TabsContent value="equity">
+            <TabsContent value="equity" className="mt-0">
               {loadingCurve ? (
                 <Skeleton className="h-64 w-full" />
               ) : equityCurve.length > 0 ? (
@@ -201,7 +201,7 @@ export default function BacktestPage() {
               )}
             </TabsContent>
             
-            <TabsContent value="trades">
+            <TabsContent value="trades" className="mt-0">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-semibold">交易详情</h3>
                 {selectedIndex !== null && (
