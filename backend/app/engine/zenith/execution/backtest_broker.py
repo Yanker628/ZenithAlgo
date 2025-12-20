@@ -123,8 +123,10 @@ class BacktestBroker(Broker):
                 "qty": fill.exec_qty,
                 "price": float(raw_price),
                 "slippage_price": fill.exec_price,
-                "fee": fill.fee_paid,
-                "realized_delta": fill.realized_delta,
+                # Mapping specifically for RaaS / Frontend display
+                "pnl": fill.realized_delta,  # Per-trade realized PnL
+                "commission": fill.fee_paid,
+                "cumulative_pnl": self.realized_pnl_all,
             }
         )
         if cid and self._ledger:

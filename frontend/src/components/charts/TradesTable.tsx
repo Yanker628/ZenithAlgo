@@ -37,7 +37,7 @@ export function TradesTable({ trades, loading }: TradesTableProps) {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>时间</TableHead>
+            <TableHead>时间 (UTC+0)</TableHead>
             <TableHead>品种</TableHead>
             <TableHead>方向</TableHead>
             <TableHead className="text-right">价格</TableHead>
@@ -50,15 +50,17 @@ export function TradesTable({ trades, loading }: TradesTableProps) {
         <TableBody>
           {trades.map((trade, index) => (
             <TableRow key={index}>
-              <TableCell className="font-mono text-sm">
-                {new Date(trade.timestamp).toLocaleString('zh-CN', {
+              <TableCell className="font-mono text-xs">
+                {new Date(trade.timestamp).toLocaleString('en-GB', {
+                  timeZone: 'UTC',
                   year: 'numeric',
                   month: '2-digit',
                   day: '2-digit',
                   hour: '2-digit',
                   minute: '2-digit',
-                  timeZone: 'Asia/Shanghai',
-                })}
+                  second: '2-digit',
+                  hour12: false
+                }).replace(',', '')}
               </TableCell>
               <TableCell className="font-medium">{trade.symbol}</TableCell>
               <TableCell>
@@ -73,40 +75,36 @@ export function TradesTable({ trades, loading }: TradesTableProps) {
                 </Badge>
               </TableCell>
               <TableCell className="text-right font-mono">
-                ${trade.price.toFixed(4)}
+                ${(trade.price || 0).toFixed(2)}
               </TableCell>
               <TableCell className="text-right font-mono">
-                {trade.qty.toFixed(2)}
+                {(trade.qty || 0).toFixed(4)}
               </TableCell>
               <TableCell className={`text-right font-mono ${
-                trade.pnl !== undefined && trade.pnl !== null
-                  ? trade.pnl > 0 
-                    ? 'text-green-600 dark:text-green-400' 
-                    : trade.pnl < 0
-                    ? 'text-red-600 dark:text-red-400'
-                    : ''
-                  : 'text-slate-400'
+                (trade.pnl || 0) > 0 
+                  ? 'text-green-600 dark:text-green-400' 
+                  : (trade.pnl || 0) < 0
+                  ? 'text-red-600 dark:text-red-400'
+                  : ''
               }`}>
                 {trade.pnl !== undefined && trade.pnl !== null 
-                  ? `$${trade.pnl.toFixed(2)}` 
+                  ? (trade.pnl >= 0 ? '+' : '') + trade.pnl.toFixed(2) 
                   : '-'}
               </TableCell>
-              <TableCell className="text-right font-mono text-slate-600 dark:text-slate-400">
+              <TableCell className="text-right font-mono text-slate-500">
                 {trade.commission !== undefined && trade.commission !== null
-                  ? `$${trade.commission.toFixed(4)}`
+                  ? trade.commission.toFixed(4)
                   : '-'}
               </TableCell>
-              <TableCell className={`text-right font-mono font-semibold ${
-                trade.cumulative_pnl !== undefined && trade.cumulative_pnl !== null
-                  ? trade.cumulative_pnl > 0 
-                    ? 'text-green-600 dark:text-green-400' 
-                    : trade.cumulative_pnl < 0
-                    ? 'text-red-600 dark:text-red-400'
-                    : ''
-                  : 'text-slate-400'
+              <TableCell className={`text-right font-mono font-bold ${
+                (trade.cumulative_pnl || 0) > 0 
+                  ? 'text-green-600 dark:text-green-400' 
+                  : (trade.cumulative_pnl || 0) < 0
+                  ? 'text-red-600 dark:text-red-400'
+                  : ''
               }`}>
                 {trade.cumulative_pnl !== undefined && trade.cumulative_pnl !== null
-                  ? `$${trade.cumulative_pnl.toFixed(2)}`
+                  ? (trade.cumulative_pnl >= 0 ? '+' : '') + trade.cumulative_pnl.toFixed(2)
                   : '-'}
               </TableCell>
             </TableRow>

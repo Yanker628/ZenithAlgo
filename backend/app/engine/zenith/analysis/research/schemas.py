@@ -90,6 +90,10 @@ class BacktestSummary(BaseModel):
     metrics: CanonicalMetrics
     data_health: DataHealth
     signal_trace: Dict[str, Any] = Field(default_factory=dict)
+    
+    # RaaS Persistence Fields
+    trades: List[Dict[str, Any]] = Field(default_factory=list)
+    equity_curve: List[Dict[str, Any]] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="forbid")
 

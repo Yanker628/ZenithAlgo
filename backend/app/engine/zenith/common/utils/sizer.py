@@ -35,7 +35,9 @@ def resolve_sizing_cfg(cfg) -> dict[str, Any]:
         bt_sizing = getattr(bt, "sizing", None) if not isinstance(bt, dict) else bt.get("sizing")
         if isinstance(bt_sizing, dict):
             return bt_sizing
-    return {}
+    
+    # Default fall-back: use 100% equity per trade signal (will be capped by RiskManager)
+    return {"position_pct": 1.0}
 
 
 def _max_qty_by_position_pct(

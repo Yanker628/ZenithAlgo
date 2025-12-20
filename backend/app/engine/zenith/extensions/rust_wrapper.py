@@ -31,6 +31,13 @@ class RustSimulator:
             # Re-raise with context
             raise RuntimeError(f"Rust indicator calculation failed for {name}: {e}") from e
 
+    def calculate_atr(self, highs: List[float], lows: List[float], closes: List[float], period: int) -> List[float]:
+        """可能直接调用 Rust ATR。"""
+        try:
+            return zenithalgo_rust.atr(highs, lows, closes, period)
+        except Exception as e:
+            raise RuntimeError(f"Rust ATR calculation failed: {e}") from e
+
     def simulate(
         self,
         price_df: pd.DataFrame,

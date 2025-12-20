@@ -13,8 +13,8 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
-interface EquityPoint {
-  timestamp: Date;
+export interface EquityPoint {
+  timestamp: Date | string; // Allow string for flexibility from API/JSON
   equity: number;
 }
 
@@ -46,10 +46,20 @@ const EquityCurveComponent = ({ data, title = "收益曲线" }: EquityCurveProps
   // Downsample and transform data - memoized to prevent re-calculation
   const chartData = useMemo(() => {
     const sampled = downsampleData(data, 1000);
-    return sampled.map(d => ({
-      date: d.timestamp instanceof Date ? d.timestamp.toISOString().split('T')[0] : d.timestamp,
-      equity: d.equity
-    }));
+    return sampled.map(d => {
+      // 更加友好的时间格式化: MM-DD HH:mm
+      const dateObj = d.timestamp instanceof Date ? d.timestamp : new Date(d.timestamp);
+      // Format: MM-DD HH:mm
+      const month = (dateObj.getMonth() + 1).toString().padStart(2, '0');
+      const day = dateObj.getDate().toString().padStart(2, '0');
+      const hours = dateObj.getHours().toString().padStart(2, '0');
+      const minutes = dateObj.getMinutes().toString().padStart(2, '0');
+      
+      return {
+        date: `${month}-${day} ${hours}:${minutes}`,
+        equity: d.equity
+      };
+    });
   }, [data]);
 
   return (
@@ -67,21 +77,24 @@ const EquityCurveComponent = ({ data, title = "收益曲线" }: EquityCurveProps
           <CartesianGrid strokeDasharray="3 3" className="stroke-slate-200 dark:stroke-slate-700" />
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 12 }}
+            tick={{ fontSize: 10 }}
             className="text-slate-600 dark:text-slate-400"
+            minTickGap={30}
           />
           <YAxis
-            tick={{ fontSize: 12 }}
+            tick={{ fontSize: 10 }}
             className="text-slate-600 dark:text-slate-400"
-            domain={[(dataMin: number) => Math.floor(dataMin - 10), (dataMax: number) => Math.ceil(dataMax + 10)]}
-            tickFormatter={(value) => Math.round(value).toString()}
+            domain={['auto', 'auto']}
+            tickFormatter={(value) => value.toFixed(0)}
           />
           <Tooltip
             contentStyle={{
               backgroundColor: "hsl(var(--background))",
               border: "1px solid hsl(var(--border))",
               borderRadius: "0.5rem",
+              fontSize: "12px",
             }}
+            formatter={(value: number) => [value.toFixed(2), "权益"]}
           />
           <Legend />
           <Line

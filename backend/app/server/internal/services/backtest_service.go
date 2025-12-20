@@ -3,6 +3,7 @@ package services
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/zenithalgo/api/internal/models"
@@ -148,4 +149,100 @@ func (s *BacktestService) GetTrades(backtestID string) ([]models.Trade, error) {
 	}
 
 	return trades, nil
+}
+
+// SaveResult persists a full backtest result
+func (s *BacktestService) SaveResult(result *models.BacktestResult, trades []models.Trade, equity []models.EquityPoint) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Beginx()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 1. Insert Backtest Metadata
+	// Note: We used named query or postgres specific syntax ($1, $2...)
+	// Since Metrics fields are standard float64, we map them manually or use named headers.
+	// Simpler to use NamedExec for structs.
+
+	// Prepare params for insertion (convert Metrics struct to flat fields if needed,
+	// but BacktestResult struct has db tags matching columns usually).
+	// Check models/backtest.go tags.
+	// Metrics are embedded fields in struct but `Metrics` field is json.
+	// The DB likely has flat columns: total_return, sharpe_ratio etc.
+	// So we need to sync Metrics struct values to the flat fields BacktestResult.*
+
+	var id int
+	err = tx.QueryRowx(`
+		INSERT INTO backtests (
+			run_id, symbol, timeframe, start_date, end_date,
+			strategy_name, params,
+			total_return, sharpe_ratio, max_drawdown, win_rate, total_trades,
+			score, passed, created_at
+		) VALUES (
+			$1, $2, $3, $4, $5,
+			$6, $7,
+			$8, $9, $10, $11, $12,
+			$13, $14, $15
+		) RETURNING id
+	`,
+		result.RunID, result.Symbol, result.Timeframe, result.StartDate, result.EndDate,
+		result.StrategyName, result.Params,
+		result.Metrics.TotalReturn, result.Metrics.Sharpe, result.Metrics.MaxDrawdown, result.Metrics.WinRate, result.Metrics.TotalTrades,
+		result.Score, result.Passed, time.Now(),
+	).Scan(&id)
+
+	if err != nil {
+		return fmt.Errorf("failed to insert backtest: %w", err)
+	}
+
+	// 2. Bulk Insert Trades
+	// For performance, simple loop or CopyFrom. Loop is fine for <10k trades.
+	if len(trades) > 0 {
+		// Use a prepared statement
+		stmt, err := tx.Preparex(`
+			INSERT INTO trades (
+				backtest_id, timestamp, symbol, side, price, qty, 
+				pnl, commission, cumulative_pnl
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		`)
+		if err != nil {
+			return fmt.Errorf("failed to prepare trade insert: %w", err)
+		}
+		for _, t := range trades {
+			_, err := stmt.Exec(
+				id, t.Timestamp, t.Symbol, t.Side, t.Price, t.Qty,
+				t.PnL, t.Commission, t.CumulativePnL,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to insert trade: %w", err)
+			}
+		}
+		stmt.Close()
+	}
+
+	// 3. Bulk Insert Equity Curve
+	if len(equity) > 0 {
+		stmt, err := tx.Preparex(`
+			INSERT INTO equity_curves (
+				backtest_id, timestamp, equity, drawdown, drawdown_pct
+			) VALUES ($1, $2, $3, $4, $5)
+		`)
+		if err != nil {
+			return fmt.Errorf("failed to prepare equity insert: %w", err)
+		}
+		for _, e := range equity {
+			_, err := stmt.Exec(
+				id, e.Timestamp, e.Equity, e.Drawdown, e.DrawdownPct,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to insert equity point: %w", err)
+			}
+		}
+		stmt.Close()
+	}
+
+	return tx.Commit()
 }

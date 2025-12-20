@@ -39,6 +39,10 @@ func main() {
 	// Start WS Hub
 	go wsHub.Run()
 
+	// Start Persistence Worker
+	persister := services.NewResultPersister(rdb, backtestService)
+	persister.Start()
+
 	// Initialize handlers
 	backtestHandler := handlers.NewBacktestHandler(backtestService)
 	jobHandler := handlers.NewJobHandler(jobService)

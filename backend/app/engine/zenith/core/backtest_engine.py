@@ -315,6 +315,21 @@ class BacktestEngine(BaseEngine):
             metrics=metrics,
             data_health=data_health,
             signal_trace=signal_trace.to_dict(),
+            # RaaS: Fill full data
+            trades=[
+                {**t, "ts": t["ts"].isoformat() if hasattr(t["ts"], "isoformat") else str(t["ts"])}
+                for t in broker.trades
+            ],
+            equity_curve=[
+                {
+                    "ts": pt[0].isoformat(),
+                    "equity": pt[1],
+                    # Re-calculate drawdown on the fly if needed, or use existing metrics logic
+                    # For simplicity, we just send ts/equity, Go can re-calc or we calc here.
+                    # Let's check _export_equity_csv logic.
+                } 
+                for pt in broker.equity_curve
+            ]
         )
 
         artifacts = self._export_artifacts(cfg, backtest_config, broker=broker)

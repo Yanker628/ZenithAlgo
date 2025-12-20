@@ -115,7 +115,7 @@ class BacktestConfig(BaseModel):
     start: str
     end: str
 
-    initial_equity: float = 0.0
+    initial_equity: float = 10000.0
     auto_download: bool = False
     force_download: bool = False
     quiet_risk_logs: bool = True

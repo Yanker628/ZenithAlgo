@@ -1,159 +1,104 @@
-# ZenithAlgo
+# ZenithAlgo 🚀
 
-<div align="center">
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Python](https://img.shields.io/badge/python-3.10+-blue)
+![Rust](https://img.shields.io/badge/rust-1.70+-orange)
+![Go](https://img.shields.io/badge/go-1.21+-cyan)
+![Next.js](https://img.shields.io/badge/next.js-14+-black)
 
-**一个事件驱动的量化交易系统（研究可复现 + 实盘可恢复）**
+**ZenithAlgo** 是一个高性能、现代化的量化交易与研究平台（Research-as-a-Service）。它融合了 Rust 的极致性能、Python 的生态便利、Go 的高并发调度以及 Web 前端的交互体验，旨在为量化研究员提供从策略研发、回测到实盘的一站式解决方案。
 
-[![Python](https://img.shields.io/badge/Python-3.13+-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+## ✨ 核心特性
 
-</div>
+- **🚀 混合架构核心**:
+  - **Rust**: 核心算子与回测引擎，提供纳秒级性能。
+  - **Go**: 负责任务调度、API 服务与 WebSocket 推送。
+  - **Python**: 策略逻辑层，兼容 Pandas/Numpy 生态。
+- **📊 RaaS (Research as a Service)**:
+  - 分布式任务队列 (Redis)，支持大规模参数扫描 (Sweep)。
+  - 实时 WebSocket 前端推送，回测进度与权益曲线可视化。
+  - 结果自动持久化 (Postgres)，数据有据可查。
+- **🛡️ 严格的数据一致性**:
+  - `M7 Alignment`: 确保 Rust Core、Python Vectorized 与 Iterative 模式下的计算结果在数学上精确一致 (Diff < 1e-10)。
+- **🖥️ 现代化前端**:
+  - 基于 Next.js 14 + Tailwind CSS + Shadcn UI 构建。
+  - 交互式 Dashboard，支持回测配置与历史记录回溯。
 
-## 简介
+## 🏗️ 架构概览
 
-ZenithAlgo 是一个基于 Python 的事件驱动量化交易系统，面向加密货币现货交易。
-系统以“可复现、可回归、可审计、不乱交易”为工程优先级。
+```mermaid
+graph TD
+    Client[Frontend (Next.js)] <-->|HTTP/WS| API[Go API Gateway]
+    API <-->|Tasks| Redis[(Redis Queue)]
+    API <-->|Events| PubSub[Redis Pub/Sub]
 
-演进计划见 `ROADMAP.md`（以仓库代码现状为准）。
+    Worker[Python Worker] <-->|Pop Job| Redis
+    Worker -->|Calc| RustCore[Rust Native Core]
+    Worker -->|Progress| PubSub
 
-## 当前能力（对齐 ROADMAP）
+    Persister[Result Persister] <-->|Sub| PubSub
+    Persister -->|Write| DB[(Postgres)]
+```
 
-- M4 全面强类型化：配置与核心产物使用 Pydantic schema，未知 key 启动即失败。
-- M4 复现契约：研究/回测产物写入 `schema_version`，并包含 `git_sha/config_hash/data_hash/created_at`。
-- M5 状态恢复：`client_order_id` 幂等 + SQLite ledger（跨进程）+ 启动对账与安全保险丝。
-- M6 数据层升级：进行中（数据集 meta/hash、列式缓存、激活 `database/`）。
+## 🛠️ 技术栈
 
-## 目录约定（输入 / 输出 / 状态）
+- **Backend (Scheduling)**: Go (Gin, Go-Redis, Gorilla WebSocket)
+- **Engine (Compute)**: Python 3.10+, Rust (PyO3, Maturin)
+- **Frontend**: TypeScript, Next.js, Recharts, Tailwind CSS
+- **Infrastructure**: Docker, Redis, PostgreSQL
+- **Tooling**: `uv` (Python pkg), `cargo` (Rust), `make`
 
-- 输入数据：`dataset/history/`（历史行情 CSV；默认 gitignore）。
-- 进程状态：`dataset/state/`（SQLite ledger；默认 gitignore）。
-- 研究产物：`results/`（统一落盘；默认 gitignore）。
-- 数据层（预留）：`database/`（用于 M6 数据层升级；不承载进程状态账本）。
-- 文档：`documents/`，路线图：`ROADMAP.md`。
+## 🚀 快速开始
 
-## 快速开始
+### 前置要求
 
-### 环境要求
+- Docker & Docker Compose
+- Go 1.21+
+- Python 3.10+ (推荐使用 `uv`)
+- Node.js 18+
 
-- Python 3.13+
+### 一键启动
 
-### 安装
+我们提供了方便的脚本来一键启动整个 RaaS 系统（含数据库、后端和前端）。
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
+chmod +x scripts/*.sh
+./scripts/start.sh
 ```
 
-### 配置
+启动后访问：
+
+- **前端控制台**: [http://localhost:3000/backtest](http://localhost:3000/backtest)
+- **API 文档/接口**: [http://localhost:8080](http://localhost:8080)
+
+### 停止系统
 
 ```bash
-cp config/config.example.yml config/config.yml
+./scripts/stop.sh
 ```
 
-环境变量（可选，支持 `.env` / `.env.local` 自动加载）：
+## ✅ 全量测试
+
+运行以下脚本以执行完整的系统自检（包括数据一致性校验和 RaaS 集成测试）：
 
 ```bash
-export BINANCE_API_KEY="your_api_key"
-export BINANCE_API_SECRET="your_api_secret"
+./scripts/test_full.sh
 ```
 
-### 运行
+## 📂 目录结构
 
-唯一入口：`main.py`。
-
-```bash
-# runner：dry-run / paper / live-*
-python3 main.py runner --config config/config.yml
-
-# 单次回测
-python3 main.py backtest --config config/config.yml
-
-# 参数搜索（sweep）
-python3 main.py sweep --config config/config.yml
-
-# Walk-Forward
-python3 main.py walkforward --config config/config.yml
+```text
+.
+├── backend
+│   ├── app
+│   │   ├── engine       # Python/Rust 回测引擎
+│   │   └── server       # Go API 调度服务
+│   ├── native           # Rust 核心源码
+│   └── scripts          # 测试与验证脚本
+├── frontend             # Next.js 前端应用
+└── scripts              # 项目级运维脚本 (start/stop)
 ```
 
-运行测试（默认跳过 live）：
+## 📜 License
 
-```bash
-python3 main.py test
-```
-
-## 产物与状态
-
-### 研究/回测产物（results）
-
-一次 backtest/sweep/walkforward 会写入：
-
-`results/{task}/{symbol}/{interval}/{start}_{end}/{run_id}/`
-
-目录内至少包含：
-
-- `config.yml`、`effective_config.json`
-- `meta.json`、`summary.json`、`results.json`（均含 `schema_version`）
-
-回测类任务还会导出 `trades.csv`、`equity.csv` 与图表（如 `equity.png`）。
-
-### 进程状态账本（dataset/state）
-
-runner（paper/live）模式默认把进程状态写入 `dataset/state/ledger.sqlite3`
-（可用 `ledger.path` 修改）。
-该账本用于跨进程幂等与恢复，不等同于研究报表产物。
-
-## 配置要点（常用开关）
-
-实盘保险丝与白名单：
-
-```yaml
-exchange:
-  allow_live: false
-  symbols_allowlist: ["BTCUSDT"]
-```
-
-启动恢复/对账（对账完成前禁止交易；失败自动只读观察）：
-
-```yaml
-recovery:
-  enabled: true
-  mode: "observe_only" # observe_only | trade
-```
-
-本地事件账本（SQLite ledger）：
-
-```yaml
-ledger:
-  enabled: true
-  path: "dataset/state/ledger.sqlite3"
-```
-
-sweep 是否额外跑一次“最佳参数单次回测”（默认关闭，避免重复计算）：
-
-```yaml
-backtest:
-  sweep:
-    run_best_backtest: false
-```
-
-## 开发命令
-
-```bash
-make help
-make test
-make lint  # 需要 npm install -g markdownlint-cli
-```
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request。
-
-## 免责声明
-
-本系统仅供学习和研究使用。
-实盘交易存在资金损失风险，请在充分测试并理解风险后使用。
-
-## 许可证
-
-MIT License（见 `LICENSE`）
+MIT
