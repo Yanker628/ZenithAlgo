@@ -1,65 +1,92 @@
-import Image from "next/image";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
 export default function Home() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900">
+      <div className="container mx-auto p-8">
+        <header className="mb-12">
+          <h1 className="text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-violet-600 dark:from-blue-400 dark:to-violet-400">
+            ZenithAlgo
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+          <p className="text-xl text-slate-600 dark:text-slate-400 mt-2">
+            量化交易策略监控平台
           </p>
+        </header>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+          <Card className="p-6 hover:shadow-lg transition-shadow">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">系统状态</h3>
+              <Badge variant="default" className="bg-green-500">运行中</Badge>
+            </div>
+            <p className="text-3xl font-bold text-slate-900 dark:text-slate-100">100%</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400">健康度</p>
+          </Card>
+
+          <Card className="p-6 hover:shadow-lg transition-shadow">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">总收益</h3>
+              <Badge variant="secondary">YTD</Badge>
+            </div>
+            <p className="text-3xl font-bold text-green-600 dark:text-green-400">
+              +12.5%
+            </p>
+            <p className="text-sm text-slate-500 dark:text-slate-400">年初至今</p>
+          </Card>
+
+          <Card className="p-6 hover:shadow-lg transition-shadow">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">活跃策略</h3>
+              <Badge variant="outline">2 / 5</Badge>
+            </div>
+            <p className="text-3xl font-bold text-slate-900 dark:text-slate-100">2</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400">正在运行</p>
+          </Card>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Card className="p-6">
+            <h3 className="text-xl font-semibold mb-4">快速操作</h3>
+            <div className="space-y-3">
+              <Button className="w-full" variant="default" asChild>
+                <a href="/backtest">查看回测结果</a>
+              </Button>
+              <Button className="w-full" variant="outline">
+                运行新回测
+              </Button>
+              <Button className="w-full" variant="secondary">
+                编辑配置
+              </Button>
+            </div>
+          </Card>
+
+          <Card className="p-6">
+            <h3 className="text-xl font-semibold mb-4">最近交易</h3>
+            <div className="space-y-3">
+              <div className="flex justify-between items-center p-3 bg-slate-50 dark:bg-slate-800 rounded">
+                <div>
+                  <p className="font-medium">BTCUSDT</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">买入</p>
+                </div>
+                <Badge className="bg-green-500">+2.1%</Badge>
+              </div>
+              <div className="flex justify-between items-center p-3 bg-slate-50 dark:bg-slate-800 rounded">
+                <div>
+                  <p className="font-medium">ETHUSDT</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">卖出</p>
+                </div>
+                <Badge className="bg-red-500">-0.8%</Badge>
+              </div>
+            </div>
+          </Card>
         </div>
-      </main>
+
+        <footer className="mt-12 text-center text-sm text-slate-500 dark:text-slate-400">
+          <p>ZenithAlgo v0.1.0 | 后端健康检查: ✓</p>
+        </footer>
+      </div>
     </div>
   );
 }

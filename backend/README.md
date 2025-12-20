@@ -82,6 +82,12 @@ python3 main.py walkforward --config config/config.yml
 python3 main.py test
 ```
 
+如果从仓库根目录运行，请改用：
+
+```bash
+./backend/.venv/bin/python backend/main.py test
+```
+
 ## 产物与状态
 
 ### 研究/回测产物（results）

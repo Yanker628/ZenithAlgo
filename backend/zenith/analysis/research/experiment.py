@@ -33,6 +33,7 @@ from zenith.common.utils.logging import setup_logger
 from zenith.common.utils.param_search import grid_search, random_search
 from zenith.analysis.visualizations.plotter import plot_param_1d, plot_param_importance, plot_sweep_heatmaps
 from zenith.analysis.reports.report import write_report_md, write_summary_md
+from zenith.database.db_helpers import save_sweep_results_to_db
 
 EXPERIMENT_SCHEMA_VERSION = "1.0"
 
@@ -444,6 +445,21 @@ def run_sweep_experiment(cfg_path: str, top_n: int = 5) -> ExperimentResult:
 
         if not sweep_csv.exists():
             raise FileNotFoundError(f"sweep.csv not found: {sweep_csv}")
+        
+        # Save to PostgreSQL database
+        try:
+            save_sweep_results_to_db(
+                sweep_csv_path=str(sweep_csv),
+                symbol=sym,
+                timeframe=str(meta["interval"]),
+                start_date=_parse_dt(str(meta.get("start"))),
+                end_date=_parse_dt(str(meta.get("end"))),
+                strategy_name="VolatilityBreak out",
+                verbose=True
+            )
+        except Exception as e:
+            logger.warning("Failed to save sweep results to database: %s", e)
+        
         header = _csv_header(sweep_csv)
         header_set = set(header)
         keys = list(param_grid.keys())
