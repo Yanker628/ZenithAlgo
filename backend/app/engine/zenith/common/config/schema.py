@@ -109,7 +109,7 @@ class SweepConfig(BaseModel):
 
 class BacktestConfig(BaseModel):
     """回测配置。"""
-    data_dir: str = "dataset/history"
+    data_dir: str = "../../data/history"
     symbol: str
     interval: str
     start: str
@@ -148,7 +148,7 @@ class BacktestConfig(BaseModel):
 class LedgerConfig(BaseModel):
     """本地事件账本（SQLite ledger）配置。"""
     enabled: bool = True
-    path: str = "dataset/state/ledger.sqlite3"
+    path: str = "../../data/state/ledger.sqlite3"
     model_config = ConfigDict(extra="forbid")
 
 

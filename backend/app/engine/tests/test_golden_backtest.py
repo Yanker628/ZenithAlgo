@@ -9,7 +9,7 @@ from zenith.analysis.metrics.metrics_canon import CANONICAL_METRIC_KEYS
 
 
 def test_golden_backtest_metrics_stable():
-    cfg_path = "config/golden_backtest.yml"
+    cfg_path = "../../data/config/golden_backtest.yml"
     cfg = load_config(cfg_path, load_env=False, expand_env=False)
     summary = BacktestEngine(cfg_obj=cfg, artifacts_dir=None).run().summary
     metrics = summary.metrics.model_dump()

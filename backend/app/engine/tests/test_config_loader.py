@@ -7,7 +7,7 @@ from zenith.common.config.config_loader import AppConfig, load_config
 
 
 def test_load_config_expands_env_and_returns_appconfig(monkeypatch: pytest.MonkeyPatch):
-    cfg_path = Path("config/config.yml")
+    cfg_path = Path("../../data/config/config.yml")
     assert cfg_path.exists(), "示例配置缺失"
 
     monkeypatch.setenv("BINANCE_API_KEY", "dummy_key")
@@ -25,7 +25,7 @@ def test_load_config_expands_env_and_returns_appconfig(monkeypatch: pytest.Monke
 
 
 def test_load_config_missing_env_raises(monkeypatch: pytest.MonkeyPatch):
-    cfg_path = Path("config/config.yml")
+    cfg_path = Path("../../data/config/config.yml")
     monkeypatch.delenv("BINANCE_API_KEY", raising=False)
     monkeypatch.delenv("BINANCE_API_SECRET", raising=False)
 

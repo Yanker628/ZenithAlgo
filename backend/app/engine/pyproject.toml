@@ -32,7 +32,7 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [tool.maturin]
-manifest-path = "rust_core/Cargo.toml"
+manifest-path = "../../native/core/Cargo.toml"
 features = ["pyo3/extension-module"]
 
 

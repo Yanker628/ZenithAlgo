@@ -71,13 +71,13 @@ def build_parser() -> argparse.ArgumentParser:
         )
 
     # 允许 `python main.py --config ... backtest`（全局）与 `python main.py backtest --config ...`（子命令）
-    _add_config_arg(parser, default="config/config.yml")
+    _add_config_arg(parser, default="../../data/config/config.yml")
 
     sub = parser.add_subparsers(dest="task")
 
     # --- Common Args Helper ---
     def _add_common(p):
-        _add_config_arg(p, default="config/config.yml")
+        _add_config_arg(p, default="../../data/config/config.yml")
 
     # 1. Runner
     p_runner = sub.add_parser("runner", help="实盘/纸面/干跑主循环")
@@ -143,7 +143,7 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
     parser = build_parser()
     ns = parser.parse_args(argv)
     task = ns.task or "runner"
-    config = getattr(ns, "config", "config/config.yml")
+    config = getattr(ns, "config", "../../data/config/config.yml")
     return CliArgs(
         config=str(config),
         task=task,
