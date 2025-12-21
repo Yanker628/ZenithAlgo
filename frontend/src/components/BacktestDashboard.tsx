@@ -1,11 +1,13 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import yaml from "js-yaml";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -29,11 +31,15 @@ interface BacktestDashboardProps {
   onRefreshHistory?: () => void;
 }
 
+// ... imports remain the same
+
 export default function BacktestDashboard(props: BacktestDashboardProps) {
   // Initialize dates
   const today = new Date();
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(today.getDate() - 30);
+
+  const [mode, setMode] = useState<"simple" | "advanced">("simple");
 
   const [config, setConfig] = useState({
     symbol: "SOLUSDT",
@@ -42,6 +48,25 @@ export default function BacktestDashboard(props: BacktestDashboardProps) {
     endDate: today.toISOString().split("T")[0],
     strategy: "simple_ma",
   });
+
+  const defaultYaml = `mode: backtest
+symbol: ETHUSDT
+backtest:
+  symbol: ETHUSDT
+  interval: 1h
+  start: "2024-01-01"
+  end: "2024-02-01"
+  initial_equity: 10000.0
+  auto_download: true
+  strategy:
+    type: volatility_breakout
+    params:
+      window: 20
+      k: 2.0
+      atr_period: 14
+      atr_stop_multiplier: 1.5`;
+
+  const [yamlConfig, setYamlConfig] = useState(defaultYaml);
   
   const [state, setState] = useState<BacktestState>({
     status: "idle",
@@ -50,7 +75,7 @@ export default function BacktestDashboard(props: BacktestDashboardProps) {
     logs: [],
     equity: [],
   });
-
+  
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -78,24 +103,42 @@ export default function BacktestDashboard(props: BacktestDashboardProps) {
     });
 
     try {
-      // 2. Submit Job via HTTP Proxy
-      const payload = {
-        symbol: config.symbol,
-        mode: "backtest",
-        backtest: {
-          symbol: config.symbol,
-          interval: config.interval,
-          start: config.startDate,
-          end: config.endDate,
-          initial_equity: 10000.0,
-          auto_download: true,
-          strategy: {
-            type: config.strategy,
-            params: getStrategyParams(config.strategy)
-          }
-        }
-      };
+      let payload;
 
+      if (mode === "advanced") {
+        try {
+          // Parse YAML
+          const parsed = yaml.load(yamlConfig) as any;
+          if (!parsed || !parsed.backtest) {
+             throw new Error("Invalid YAML: missing 'backtest' section");
+          }
+          payload = parsed;
+          // Ensure mode is backtest
+          payload.mode = "backtest";
+        } catch (e: any) {
+           throw new Error(`YAML Parse Error: ${e.message}`);
+        }
+      } else {
+        // Simple Mode Construction
+        payload = {
+          symbol: config.symbol,
+          mode: "backtest",
+          backtest: {
+            symbol: config.symbol,
+            interval: config.interval,
+            start: config.startDate,
+            end: config.endDate,
+            initial_equity: 10000.0,
+            auto_download: true,
+            strategy: {
+              type: config.strategy,
+              params: getStrategyParams(config.strategy)
+            }
+          }
+        };
+      }
+
+      // 2. Submit Job via HTTP Proxy
       const res = await fetch("/api/backtest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -106,7 +149,7 @@ export default function BacktestDashboard(props: BacktestDashboardProps) {
       const data = await res.json();
       const jobId = data.job_id;
 
-      setState(prev => ({ ...prev, jobId, logs: [...prev.logs, `Job Submitted: ${jobId}`] }));
+      setState(prev => ({ ...prev, jobId, logs: [...prev.logs, `Job Submitted: ${jobId} (${mode.toUpperCase()})`] }));
 
       // 3. Connect Log Stream (WebSocket)
       connectWebSocket(jobId);
@@ -187,86 +230,122 @@ export default function BacktestDashboard(props: BacktestDashboardProps) {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
       {/* 1. Control Panel */}
-      <Card className="p-6 lg:col-span-1 h-fit">
-        <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-          <Activity className="w-5 h-5" /> 配置策略
-        </h2>
+      <Card className="p-6 lg:col-span-1 h-fit flex flex-col">
+        <div className="flex items-center justify-between mb-4">
+           <h2 className="text-xl font-semibold flex items-center gap-2">
+             <Activity className="w-5 h-5" /> 配置策略
+           </h2>
+           <div className="flex bg-slate-100 dark:bg-slate-800 rounded-lg p-1 text-xs">
+              <button 
+                onClick={() => setMode("simple")}
+                className={`px-3 py-1 rounded-md transition-all ${mode === "simple" ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-slate-500"}`}
+              >
+                Simple
+              </button>
+              <button 
+                onClick={() => setMode("advanced")}
+                className={`px-3 py-1 rounded-md transition-all ${mode === "advanced" ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-slate-500"}`}
+              >
+                YAML
+              </button>
+           </div>
+        </div>
         
-        <div className="space-y-4">
-          <div>
-            <label className="text-sm font-medium mb-1 block">交易对</label>
-            <Select 
-              value={config.symbol} 
-              onValueChange={(v) => setConfig({...config, symbol: v})}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="SOLUSDT">SOLUSDT</SelectItem>
-                <SelectItem value="BTCUSDT">BTCUSDT</SelectItem>
-                <SelectItem value="ETHUSDT">ETHUSDT</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+        <div className="space-y-4 flex-1">
+          {mode === "simple" ? (
+            <>
+              <div>
+                <label className="text-sm font-medium mb-1 block">交易对</label>
+                <Select 
+                  value={config.symbol} 
+                  onValueChange={(v) => setConfig({...config, symbol: v})}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="SOLUSDT">SOLUSDT</SelectItem>
+                    <SelectItem value="BTCUSDT">BTCUSDT</SelectItem>
+                    <SelectItem value="ETHUSDT">ETHUSDT</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-          <div>
-            <label className="text-sm font-medium mb-1 block">时间周期</label>
-            <Select 
-              value={config.interval} 
-              onValueChange={(v) => setConfig({...config, interval: v})}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="15m">15m</SelectItem>
-                <SelectItem value="1h">1h</SelectItem>
-                <SelectItem value="4h">4h</SelectItem>
-                <SelectItem value="1d">1d</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">时间周期</label>
+                <Select 
+                  value={config.interval} 
+                  onValueChange={(v) => setConfig({...config, interval: v})}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="15m">15m</SelectItem>
+                    <SelectItem value="1h">1h</SelectItem>
+                    <SelectItem value="4h">4h</SelectItem>
+                    <SelectItem value="1d">1d</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-          {/* Date Range Selection */}
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-sm font-medium mb-1 block flex items-center gap-1">
-                 开始日期 <Calendar className="w-3 h-3"/>
-              </label>
-              <Input 
-                type="date" 
-                value={config.startDate} 
-                onChange={(e) => setConfig({...config, startDate: e.target.value})} 
-              />
+              {/* Date Range Selection */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-sm font-medium mb-1 block flex items-center gap-1">
+                     开始 <Calendar className="w-3 h-3"/>
+                  </label>
+                  <Input 
+                    type="date" 
+                    value={config.startDate} 
+                    onChange={(e) => setConfig({...config, startDate: e.target.value})} 
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium mb-1 block flex items-center gap-1">
+                     结束 <Calendar className="w-3 h-3"/>
+                  </label>
+                  <Input 
+                    type="date" 
+                    value={config.endDate} 
+                    onChange={(e) => setConfig({...config, endDate: e.target.value})} 
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium mb-1 block">策略类型</label>
+                <Select 
+                  value={config.strategy} 
+                  onValueChange={(v) => setConfig({...config, strategy: v})}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="simple_ma">Simple MA</SelectItem>
+                    <SelectItem value="volatility_breakout">Volatility Breakout</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col h-full">
+               <label className="text-sm font-medium mb-1 block flex justify-between">
+                 <span>Config YAML</span>
+                 <span className="text-xs text-slate-400 font-normal">Full control</span>
+               </label>
+               <Textarea 
+                 value={yamlConfig}
+                 onChange={(e) => setYamlConfig(e.target.value)}
+                 className="font-mono text-xs flex-1 min-h-[300px] resize-none bg-slate-50 dark:bg-slate-900"
+                 spellCheck={false}
+               />
+               <p className="text-[10px] text-slate-400 mt-2">
+                 * Edit `backtest` section to change params.
+               </p>
             </div>
-            <div>
-              <label className="text-sm font-medium mb-1 block flex items-center gap-1">
-                 结束日期 <Calendar className="w-3 h-3"/>
-              </label>
-              <Input 
-                type="date" 
-                value={config.endDate} 
-                onChange={(e) => setConfig({...config, endDate: e.target.value})} 
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="text-sm font-medium mb-1 block">策略类型</label>
-            <Select 
-              value={config.strategy} 
-              onValueChange={(v) => setConfig({...config, strategy: v})}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="simple_ma">Simple MA</SelectItem>
-                <SelectItem value="volatility_breakout">Volatility Breakout</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          )}
 
           <Button 
             className="w-full mt-4" 
@@ -278,11 +357,11 @@ export default function BacktestDashboard(props: BacktestDashboardProps) {
             ) : (
               <Play className="w-4 h-4 mr-2" />
             )}
-            {state.status === "running" ? "运行中..." : "开始回测"}
+            {state.status === "running" ? "运行中 (Running)..." : `开始回测 (${mode === 'simple' ? 'Simple' : 'Adv'})`}
           </Button>
 
           {/* Logs Terminal */}
-          <div className="bg-slate-950 text-slate-300 p-3 rounded-md text-xs font-mono h-48 overflow-y-auto">
+          <div className="bg-slate-950 text-slate-300 p-3 rounded-md text-xs font-mono h-48 overflow-y-auto w-full">
             {state.logs.map((log, i) => (
               <div key={i}>{log}</div>
             ))}

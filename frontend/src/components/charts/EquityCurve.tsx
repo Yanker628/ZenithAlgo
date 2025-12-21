@@ -94,7 +94,7 @@ const EquityCurveComponent = ({ data, title = "收益曲线" }: EquityCurveProps
               borderRadius: "0.5rem",
               fontSize: "12px",
             }}
-            formatter={(value: number) => [value.toFixed(2), "权益"]}
+            formatter={(value: any) => [value.toFixed(2), "权益"]}
           />
           <Legend />
           <Line
