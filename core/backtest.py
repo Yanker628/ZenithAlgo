@@ -7,13 +7,17 @@ from typing import Dict, Any, Optional
 class BacktestResult:
     metrics: Dict[str, float]
     equity_curve: pd.Series
+    benchmark_equity: pd.Series  # 新增: 买入持仓基准权益
     trades: pd.DataFrame
     signals: pd.DataFrame
 
 class VectorBacktester:
     def __init__(self, data: pd.DataFrame, initial_capital: float = 10000.0, commission: float = 0.0005):
         """
-        :param data: DataFrame with columns ['open', 'high', 'low', 'close', 'volume'] and datetime index
+        初始化向量化回测器
+        :param data: 包含 ['open', 'high', 'low', 'close', 'volume'] 列且为 datetime索引的 DataFrame
+        :param initial_capital: 初始资金，默认 10000.0
+        :param commission: 手续费率，默认 0.0005 (0.05%)
         """
         self.data = data.copy()
         self.initial_capital = initial_capital
@@ -21,50 +25,45 @@ class VectorBacktester:
 
     def run(self, strategy_func, **params) -> BacktestResult:
         """
-        Run the backtest.
-        :param strategy_func: Function that takes (df, **params) and returns a Series of signals (1: Buy, -1: Sell, 0: Neutral/Hold)
+        运行回测
+        :param strategy_func: 策略函数，接收 (df, **params) 并返回一个信号 Series (1: 做多/买入, -1: 做空/卖出, 0: 空仓/持有)
         """
-        # 1. Calculate Signals
+        # 1. 计算信号 (Calculate Signals)
         signals = strategy_func(self.data, **params)
         
-        # Ensure signals are shifted by 1 to avoid lookahead bias (signal at close of T executes at open of T+1)
-        # Note: Vectorized backtests often assume execution at Close of same bar or Open of next. 
-        # For simplicity here, we assume execution at Close of the signal bar (Signal generated slightly before close), 
-        # OR shift it. Let's assume signal is decided at close, executed at NEXT Open for realism.
-        
-        # Simple Vector approaches often use Close-to-Close returns.
-        # Let's align execution to simple 'position' logic:
-        # Position = Signal held.
-        
+        # 为了避免未来函数偏差 (lookahead bias)，将信号后移一期
         self.data['log_ret'] = np.log(self.data['close'] / self.data['close'].shift(1))
         
-        # Position indicates what we hold at the END of the bar.
-        # If signal is generated using data up to T, we can enter at T's close (simplified) or T+1 Open.
-        # Let's assume entry at Close for simplicity in vectorization without separate Open price column handling if only Close is used.
-        # However, to be safe against lookahead, we usually shift position by 1.
-        
+        # --- 计算基准 (Benchmark) ---
+        # 买入并持有 (Buy & Hold) 的累计收益
+        self.data['benchmark_cum_ret'] = self.data['log_ret'].cumsum()
+        self.data['benchmark_equity'] = self.initial_capital * np.exp(self.data['benchmark_cum_ret'])
+
+        # --- 计算策略 (Strategy) ---
+        # Position 表示在这根 K 线 **结束时** 我们持有的仓位。
         self.data['position'] = signals.shift(1).fillna(0)
         
-        # Strategy Returns = Position(T-1) * Returns(T)
+        # 策略收益 = 上一期仓位 * 本期收益率
         self.data['strategy_ret'] = self.data['position'] * self.data['log_ret']
         
-        # Apply commission (simplified approximation: whenever pos changes)
+        # 计算手续费 (简化近似：只要仓位发生变化就扣除手续费)
         trades = self.data['position'].diff().fillna(0).abs()
         self.data['strategy_ret'] -= trades * self.commission
         
-        # Equity Curve
+        # 计算权益曲线 (Equity Curve)
         self.data['cumulative_ret'] = self.data['strategy_ret'].cumsum()
         self.data['equity'] = self.initial_capital * np.exp(self.data['cumulative_ret'])
         
-        # Metrics
+        # 计算指标 (Metrics)
         metrics = self._calculate_metrics(self.data['strategy_ret'])
         
-        # Extract Trades List (simplified)
+        # 提取交易列表 (简化版)
         trade_logs = self._extract_trades(self.data['position'])
 
         return BacktestResult(
             metrics=metrics,
             equity_curve=self.data['equity'],
+            benchmark_equity=self.data['benchmark_equity'],
             trades=trade_logs,
             signals=signals
         )
@@ -76,24 +75,24 @@ class VectorBacktester:
         days = (self.data.index[-1] - self.data.index[0]).days
         if days == 0: days = 1
         
-        # Annualized Return (Approx)
+        # 年化收益率 (Approx CAGR)
         total_ret = np.exp(returns.sum()) - 1
         cagr = (1 + total_ret) ** (365 / days) - 1
         
-        # Sharpe (Daily) - assuming crypto 365 days
-        # Resample to daily if data is intraday is better, but here we use bar-based approx
+        # 夏普比率 (Sharpe Ratio) - 假设加密货币 365 天交易
+        # 更严谨的做法是将数据重采样到日线，但这里使用每根K线的统计特征进行年化
         sharpe = 0
         std = returns.std()
         if std > 0:
-            # Simple annualized sharpe assuming e.g. 4h bars (6 bars/day * 365) or 1h (24*365)
-            # We'll just print consistency for now or use per-bar
-            sharpe = returns.mean() / std * np.sqrt(365 * 24) # Assuming hourly default roughly
+            # 简单的年化夏普比率，假设默认是小时线 (24*365)
+            # 如果是4小时线则是 (6*365)，这里粗略按小时线估算，仅供参考
+            sharpe = returns.mean() / std * np.sqrt(365 * 24) 
             
-        # Drawdown
+        # 最大回撤 (Max Drawdown)
         cum_ret = returns.cumsum()
         peak = cum_ret.cummax()
         drawdown = cum_ret - peak
-        max_drawdown = np.exp(drawdown.min()) - 1 # convert log ret back to pct
+        max_drawdown = np.exp(drawdown.min()) - 1 # 将对数收益率转回百分比
         
         return {
             "Total Return": total_ret,
@@ -103,7 +102,47 @@ class VectorBacktester:
         }
 
     def _extract_trades(self, position: pd.Series) -> pd.DataFrame:
-        # A very basic trade extractor from position vector
-        # Returns a dataframe of entries and exits
-        # TODO: Implement full trade list for visualization
-        return pd.DataFrame()
+        """
+        从仓位变化中提取具体的交易记录
+        """
+        trades = []
+        # 找出仓位发生变化的时间点
+        # diff != 0 意味着仓位变了 (0->1 买入, 1->0 卖出, 1->-1 反手)
+        diff = position.diff().fillna(0)
+        trade_indices = diff[diff != 0].index
+        
+        entry_price = 0.0
+        entry_time = None
+        
+        for ts in trade_indices:
+            change = diff.loc[ts]
+            current_price = self.data.loc[ts, 'close']
+            
+            # change > 0: 买入 (可能是开多，也可能是平空)
+            # 这里简化处理：假设只有做多逻辑 (0 -> 1) 和 平仓 (1 -> 0)
+            
+            if change > 0: # 买入/开仓
+                entry_price = current_price
+                entry_time = ts
+                
+            elif change < 0: # 卖出/平仓
+                if entry_time is not None:
+                    # 只有之前有开仓才能平仓
+                    pnl = (current_price - entry_price) / entry_price
+                    # 扣除双边手续费 (简单的估算)
+                    pnl -= self.commission * 2
+                    
+                    trades.append({
+                        "Entry Time": entry_time,
+                        "Entry Price": entry_price,
+                        "Exit Time": ts,
+                        "Exit Price": current_price,
+                        "PnL": pnl,
+                        "PnL %": round(pnl * 100, 2)
+                    })
+                    entry_time = None # 重置
+        
+        if not trades:
+            return pd.DataFrame()
+            
+        return pd.DataFrame(trades)
