@@ -74,23 +74,45 @@ class MexcWebsocketClient:
         rest_task = asyncio.create_task(self._rest_polling_loop())
         
         await asyncio.gather(ws_task, rest_task)
-
-    async def _ws_connect_loop(self):
-        """WebSocket 连接循环"""
-        while self.running:
+        retry_count = 0
+        max_retries = 3  # 最多重试 3 次后放弃 WS，使用 REST
+        
+        while self.running and retry_count < max_retries:
             try:
+                logger.info(f"🔗 Connecting to {self.WS_URL}...")
                 # 添加 User-Agent 和 Origin (尝试绕过 WAF)
                 ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 origin = "https://www.mexc.com"
-                
-                async with websockets.connect(self.WS_URL, user_agent_header=ua, origin=origin) as ws:
+                async with websockets.connect(self.WS_URL, close_timeout=5, user_agent_header=ua, origin=origin) as ws:
                     self.ws = ws
                     logger.info("✅ MEXC WebSocket Connected")
+                    
+                    # 订阅行情
                     await self._subscribe()
+                    
+                    # 开始接收消息
                     await self._message_loop()
+                    
+            except websockets.exceptions.ConnectionClosedError as e:
+                # 检查是否是 1005 错误（服务器主动关闭）
+                if e.code == 1005:
+                    logger.warning(f"⚠️ WebSocket 1005 错误（服务器关闭连接）- 切换到 REST Polling")
+                    retry_count = max_retries  # 停止重试 WS
+                    break
+                else:
+                    logger.warning(f"⚠️ WS Error (Will retry): {e}")
+                    retry_count += 1
+                    await asyncio.sleep(2)
+                    
             except Exception as e:
-                logger.warning(f"⚠️ WS Error (Will retry): {e}")
-                await asyncio.sleep(5)
+                logger.warning(f"⚠️ WS Connection failed: {e}")
+                retry_count += 1
+                await asyncio.sleep(2)
+        
+        # 如果 WebSocket 失败，启用 REST Polling Fallback
+        if retry_count >= max_retries:
+            logger.info("🔄 Starting REST Polling Fallback...")
+            await self._rest_polling_loop()
 
     async def _rest_polling_loop(self):
         """REST API 轮询循环 (Fallback)"""
