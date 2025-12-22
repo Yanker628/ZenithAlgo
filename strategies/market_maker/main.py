@@ -36,9 +36,15 @@ class MarketMakerEngine:
         self.scanner = MarketScanner()
         
         # 过滤不安全的币种
-        self.safe_symbols = self.scanner.scan_opportunities(symbols)
+        # ⚠️ 在受限网络下，Scanner 可能会失败。为了稳定性，我们优先尝试 Scan，失败则Fallback
+        try:
+            self.safe_symbols = self.scanner.scan_opportunities(symbols)
+        except Exception as e:
+            logger.warning(f"⚠️ Scanner failed ({e}), using default symbols.")
+            self.safe_symbols = []
+            
         if not self.safe_symbols:
-            logger.error("❌ No safe symbols found! Using fallback list.")
+            logger.warning("⚠️ No safe symbols found or Scanner failed! Using fallback list.")
             # Fallback 默认列表，防止系统崩溃
             self.safe_symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT']
             
@@ -125,6 +131,13 @@ class MarketMakerEngine:
                 await asyncio.gather(*tasks, return_exceptions=True)
             except:
                 pass
+                
+            # 显式释放资源 (解决 Unclosed client session)
+            if self.oracle:
+                await self.oracle.close()
+            if self.executor:
+                await self.executor.close()
+                
             logger.info("✅ Engine stopped.")
 
     async def strategy_loop(self):

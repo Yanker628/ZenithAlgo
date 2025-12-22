@@ -18,9 +18,19 @@ class MarketScanner:
     def __init__(self):
         # 初始化交易所 API (只读)
         # ⚠️ 强制指定 defaultType='spot'，避免连接到 fapi/dapi 导致超时
-        self.binance = ccxt.binance({'options': {'defaultType': 'spot'}})
-        self.mexc = ccxt.mexc({'options': {'defaultType': 'spot'}})
-        self.okx = ccxt.okx({'options': {'defaultType': 'spot'}})
+        # ⚠️ 设置超时为 2 秒，避免在受限网络下阻塞太久
+        self.binance = ccxt.binance({
+            'options': {'defaultType': 'spot'},
+            'timeout': 2000  # 2秒超时
+        })
+        self.mexc = ccxt.mexc({
+            'options': {'defaultType': 'spot'},
+            'timeout': 2000
+        })
+        self.okx = ccxt.okx({
+            'options': {'defaultType': 'spot'},
+            'timeout': 2000
+        })
         
         # 缓存
         self.safe_symbols_cache = set()
