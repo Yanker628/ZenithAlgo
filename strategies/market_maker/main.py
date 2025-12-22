@@ -6,7 +6,7 @@ import time
 from typing import Dict, List
 
 from strategies.market_maker.gateways.mexc_ws import MexcWebsocketClient
-from strategies.market_maker.gateways.binance_oracle import BinancePriceOracle
+from strategies.market_maker.core.oracle import MultiSourceOracle
 from strategies.market_maker.core.algo import AvellanedaStoikovModel, ASParams
 from strategies.market_maker.core.scanner import MarketScanner
 from strategies.market_maker.core.executor import HighFrequencyExecutor
@@ -46,7 +46,8 @@ class MarketMakerEngine:
         
         # 通信层 (必须在 __init__ 中全部初始化)
         self.mexc_ws = MexcWebsocketClient(self.safe_symbols)
-        self.oracle = BinancePriceOracle(self.safe_symbols)
+        # 使用多源 Oracle (Binance -> OKX -> Bybit -> Gate)
+        self.oracle = MultiSourceOracle(self.safe_symbols)
         
         # 算法模型 (为每个币种创建一个 AS 模型实例)
         self.algos: Dict[str, AvellanedaStoikovModel] = {}
@@ -144,10 +145,10 @@ class MarketMakerEngine:
         """处理由于时间流逝或数据更新触发的 Tick"""
         
         # 1. 获取数据
-        # Binance Oracle Price (Safe Anchor)
+        # Oracle Price (Multi-Source)
         oracle_data = self.oracle.get_price(symbol)
         if not oracle_data:
-            return  # 数据未就绪
+            return  # 数据未就绪（Engine刚启动时）
             
         ref_price = oracle_data['mid']
         
