@@ -70,12 +70,14 @@ class MexcWebsocketClient:
         ws_task = asyncio.create_task(self._ws_connect_loop())
         
         # 同时启动 REST Polling (作为保底，或者 WS Blocked 时的主力)
-        # 实际生产中可以做更复杂的故障切换，这里为了确保可用性，直接并行启动
         rest_task = asyncio.create_task(self._rest_polling_loop())
         
         await asyncio.gather(ws_task, rest_task)
+
+    async def _ws_connect_loop(self):
+        """WebSocket 连接循环"""
         retry_count = 0
-        max_retries = 3  # 最多重试 3 次后放弃 WS，使用 REST
+        max_retries = 3  # 最多重试 3 次后放弃 WS
         
         while self.running and retry_count < max_retries:
             try:
@@ -83,6 +85,7 @@ class MexcWebsocketClient:
                 # 添加 User-Agent 和 Origin (尝试绕过 WAF)
                 ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 origin = "https://www.mexc.com"
+                
                 async with websockets.connect(self.WS_URL, close_timeout=5, user_agent_header=ua, origin=origin) as ws:
                     self.ws = ws
                     logger.info("✅ MEXC WebSocket Connected")
@@ -96,7 +99,7 @@ class MexcWebsocketClient:
             except websockets.exceptions.ConnectionClosedError as e:
                 # 检查是否是 1005 错误（服务器主动关闭）
                 if e.code == 1005:
-                    logger.warning(f"⚠️ WebSocket 1005 错误（服务器关闭连接）- 切换到 REST Polling")
+                    logger.warning(f"⚠️ WebSocket 1005 错误（服务器关闭连接）- 放弃 WS，使用 REST Polling")
                     retry_count = max_retries  # 停止重试 WS
                     break
                 else:
@@ -109,10 +112,8 @@ class MexcWebsocketClient:
                 retry_count += 1
                 await asyncio.sleep(2)
         
-        # 如果 WebSocket 失败，启用 REST Polling Fallback
         if retry_count >= max_retries:
-            logger.info("🔄 Starting REST Polling Fallback...")
-            await self._rest_polling_loop()
+            logger.info("⚠️ WebSocket 连接失败，完全依赖 REST Polling")
 
     async def _rest_polling_loop(self):
         """REST API 轮询循环 (Fallback)"""
