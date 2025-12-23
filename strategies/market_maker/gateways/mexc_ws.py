@@ -2,10 +2,36 @@ import asyncio
 import json
 import time
 import logging
+import os
+from decimal import Decimal
 import websockets
-from typing import Dict, Optional, Callable, List
+from typing import Any, Dict, List, Optional, Protocol
 
 logger = logging.getLogger(__name__)
+
+class WebSocketClientProtocol(Protocol):
+    async def send(self, message: Any) -> None: ...
+    async def recv(self) -> Any: ...
+
+
+def _to_float(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return float(default)
+    if isinstance(value, float):
+        return value
+    if isinstance(value, int):
+        return float(value)
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return float(default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
 
 class MexcWebsocketClient:
     """
@@ -26,40 +52,41 @@ class MexcWebsocketClient:
         """
         self.symbols = [s.replace('/', '') for s in symbols] # 格式化为符号 (e.g. BTCUSDT)
         self.running = False
-        self.ws = None
+        self.ws: Optional[WebSocketClientProtocol] = None
         self._data_event = asyncio.Event()
         
         # 数据缓存
-        self.orderbooks: Dict[str, Dict] = {}  # {symbol: {'bids': [], 'asks': [], 'ts': 0}}
-        self.trades: Dict[str, List] = {}      # {symbol: [latest_trades]}
+        self.orderbooks: Dict[str, Dict[str, Any]] = {}  # {symbol: {'bids': [[p,q]], 'asks': [[p,q]], 'ts': float}}
+        self.trades: Dict[str, List[Dict[str, Any]]] = {}  # {symbol: [{'price', 'volume', 'side', 'ts'}]}
         
         # 价格历史（用于动态价差）
         from collections import deque
         self.price_history = {sym: deque(maxlen=30) for sym in self.symbols}
-        self.last_mid_price = {sym: 0.0 for sym in self.symbols}
+        self.last_mid_price: Dict[str, float] = {sym: 0.0 for sym in self.symbols}
         
         # 回调函数
         self.on_depth_update = None
 
     async def _subscribe(self):
         """订阅 Orderbook 和 Deals"""
+        ws = self.ws
+        if ws is None:
+            raise RuntimeError("WebSocket not connected")
+
         for symbol in self.symbols:
-            # 尝试小写符号
-            lower_sym = symbol.lower()
-            
             # 订阅深度
             depth_msg = {
                 "method": "SUBSCRIPTION",
                 "params": [f"spot@public.limit.depth.v3.api@{symbol}@5"]
             }
-            await self.ws.send(json.dumps(depth_msg))
+            await ws.send(json.dumps(depth_msg))
             
             # 订阅成交
             trade_msg = {
                 "method": "SUBSCRIPTION",
                 "params": [f"spot@public.deals.v3.api@{symbol}"]
             }
-            await self.ws.send(json.dumps(trade_msg))
+            await ws.send(json.dumps(trade_msg))
             
             logger.info(f"📡 Subscribed to {symbol}")
         
@@ -111,16 +138,29 @@ class MexcWebsocketClient:
     async def _ws_connect_loop(self):
         """WebSocket 连接循环"""
         retry_count = 0
-        max_retries = 3  # 最多重试 3 次后放弃 WS
+        max_retries = int(os.getenv("MEXC_WS_MAX_RETRIES", "3"))  # 3: 默认短重试；0: 无限重试
+        cooldown_seconds = float(os.getenv("MEXC_WS_RETRY_COOLDOWN", "60"))  # 达到最大重试后冷却时间
         
-        while self.running and retry_count < max_retries:
+        while self.running:
+            if max_retries != 0 and retry_count >= max_retries:
+                logger.info("⚠️ WebSocket 多次失败，进入冷却；继续依赖 REST Polling")
+                await asyncio.sleep(cooldown_seconds)
+                retry_count = 0
+                continue
+
             try:
                 logger.info(f"🔗 Connecting to {self.WS_URL}...")
                 # 添加 User-Agent 和 Origin (尝试绕过 WAF)
                 ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 origin = "https://www.mexc.com"
                 
-                async with websockets.connect(self.WS_URL, close_timeout=5, user_agent_header=ua, origin=origin) as ws:
+                async with websockets.connect(
+                    self.WS_URL,
+                    close_timeout=5,
+                    ping_interval=15,
+                    ping_timeout=10,
+                    extra_headers={"User-Agent": ua, "Origin": origin},
+                ) as ws:
                     self.ws = ws
                     logger.info("✅ MEXC WebSocket Connected")
                     
@@ -130,24 +170,16 @@ class MexcWebsocketClient:
                     # 开始接收消息
                     await self._message_loop()
                     
-            except websockets.exceptions.ConnectionClosedError as e:
-                # 检查是否是 1005 错误（服务器主动关闭）
-                if e.code == 1005:
-                    logger.warning(f"⚠️ WebSocket 1005 错误（服务器关闭连接）- 放弃 WS，使用 REST Polling")
-                    retry_count = max_retries  # 停止重试 WS
-                    break
-                else:
-                    logger.warning(f"⚠️ WS Error (Will retry): {e}")
-                    retry_count += 1
-                    await asyncio.sleep(2)
+            except websockets.exceptions.ConnectionClosed as e:
+                # 1005=对端无状态码关闭（常见于WAF/网络抖动/心跳不匹配），按普通错误处理重试
+                logger.warning(f"⚠️ WS Error (Will retry): {e}")
+                retry_count += 1
+                await asyncio.sleep(min(2 * retry_count, 15))
                     
             except Exception as e:
                 logger.warning(f"⚠️ WS Connection failed: {e}")
                 retry_count += 1
-                await asyncio.sleep(2)
-        
-        if retry_count >= max_retries:
-            logger.info("⚠️ WebSocket 连接失败，完全依赖 REST Polling")
+                await asyncio.sleep(min(2 * retry_count, 15))
 
     async def _rest_polling_loop(self):
         """REST API 轮询循环（核心数据源）"""
@@ -204,12 +236,14 @@ class MexcWebsocketClient:
                         
                         # 更新价格历史（用于波动率计算）
                         if ob['bids'] and ob['asks']:
-                            mid_price = (ob['bids'][0][0] + ob['asks'][0][0]) / 2
+                            bid0 = _to_float(ob['bids'][0][0])
+                            ask0 = _to_float(ob['asks'][0][0])
+                            mid_price = (bid0 + ask0) / 2.0
                             self.price_history[symbol].append({
-                                'price': mid_price,
+                                'price': float(mid_price),
                                 'timestamp': time.time()
                             })
-                            self.last_mid_price[symbol] = mid_price
+                            self.last_mid_price[symbol] = float(mid_price)
                         
                         # 获取成交数据（非关键，失败不影响）
                         try:
@@ -246,25 +280,38 @@ class MexcWebsocketClient:
         clean_trades = []
         for t in trades:
             clean_trades.append({
-                'price': t['price'],
-                'volume': t['amount'],
-                'side': t['side'],
-                'ts': t['timestamp']
+                'price': _to_float(t.get('price')),
+                'volume': _to_float(t.get('amount')),
+                'side': t.get('side'),
+                'ts': int(t.get('timestamp') or 0)
             })
         self.trades[symbol] = clean_trades
         
     async def _message_loop(self):
         """消息处理循环"""
+        ws = self.ws
+        if ws is None:
+            raise RuntimeError("WebSocket not connected")
+
         while self.running:
             try:
-                msg = await self.ws.recv()
+                msg = await ws.recv()
+                # MEXC 可能发纯文本 ping
+                if msg == "ping":
+                    await ws.send("pong")
+                    continue
+
                 data = json.loads(msg)
                 
                 # Debug raw msg only if needed
                 # logger.info(f"raw_msg: {str(data)[:100]}")
                 
                 if data.get('msg') == 'ping':
-                    await self.ws.send(json.dumps({"msg": "pong"}))
+                    await ws.send(json.dumps({"msg": "pong"}))
+                    continue
+                # 兼容 {"ping": 123} 这类心跳
+                if "ping" in data:
+                    await ws.send(json.dumps({"pong": data.get("ping")}))
                     continue
                 
                 if 'c' in data:
@@ -275,7 +322,7 @@ class MexcWebsocketClient:
                         self._handle_trade(data)
                         
             except Exception as e:
-                raise e # 让外层重连
+                raise  # 让外层重连
 
     def _handle_depth(self, data):
         """处理深度数据更新"""
@@ -372,12 +419,12 @@ class MexcWebsocketClient:
         log_returns = np.diff(np.log(prices))
         
         # 标准差（波动率）
-        volatility = np.std(log_returns)
+        volatility = float(np.std(log_returns))
         
         # 年化转换（假设每秒1个数据点）
-        volatility_pct = volatility * 100  # 转为百分比
+        volatility_pct = float(volatility * 100)  # 转为百分比
         
-        return max(0.001, min(volatility_pct, 0.05))  # 限制在 0.001% - 0.05%
+        return float(max(0.001, min(volatility_pct, 0.05)))  # 限制在 0.001% - 0.05%
 
 
 # ===== 测试代码 =====

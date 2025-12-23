@@ -126,7 +126,6 @@ MIN_PROFIT_THRESHOLD=0.001    # 最小利润阈值（0.1%）
 - **`core/executor.py`**: 高频订单执行器
 - **`core/scanner.py`**: 币种安全筛选器
 - **`gateways/mexc_ws.py`**: MEXC WebSocket + REST Polling
-- **`gateways/binance_oracle.py`**: Binance 价格 Oracle
 - **`main.py`**: 策略引擎主逻辑
 - **`dashboard.py`**: TUI 监控面板
 

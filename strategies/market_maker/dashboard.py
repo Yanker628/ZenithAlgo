@@ -2,6 +2,7 @@ import asyncio
 import time
 from collections import deque
 from datetime import datetime
+from typing import Any, Dict
 from rich.live import Live
 from rich.layout import Layout
 from rich.panel import Panel
@@ -71,7 +72,7 @@ class MarketMakerDashboard:
         root_logger.addHandler(handler)
         root_logger.setLevel(logging.INFO)
 
-    def on_data_update(self, data):
+    def on_data_update(self, data: Dict[str, Any]) -> None:
         """引擎回调：接收实时价格数据 (极高频)"""
         sym = data['symbol']
         details = self.state['market'].get(sym, {})
@@ -92,6 +93,13 @@ class MarketMakerDashboard:
         """后台循环：获取低频数据 (余额、订单)"""
         while True:
             try:
+                # Detect dataflow stalls (no on_tick updates)
+                last_upd = self.state.get("last_update", 0)
+                if last_upd and time.time() - last_upd > 8:
+                    self.state["logs"].append(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ No tick updates for {time.time()-last_upd:.0f}s (Oracle/MarketData may be stale)"
+                    )
+
                 # 1. 获取余额 (可能耗时)
                 balances = await self.engine.fetch_account_balances()
                 self.state['usdt_balance'] = balances.get('USDT', 0.0)
@@ -179,7 +187,7 @@ class MarketMakerDashboard:
         grid.add_row(
             f"[bold white]🚀 ZenithAlgo MM[/bold white] | {mode}",
             f"[bold yellow]💰 Equity: ${equity:,.2f}[/bold yellow]",
-            f"[{color}]📈 PnL: {sign}${abs(pnl):.2f} ({sign}{pnl_pct:.2f}%)[/{color}] \n[dim]🕒 {hb_text}[/dim]"
+            f"[{color}]📈 PnL: {sign}${abs(pnl):.2f} ({sign}{pnl_pct:.2f}%)[/{color}] \n[{hb_color}]🕒 {hb_text}[/{hb_color}]"
         )
         
         return Panel(grid, style="on blue")

@@ -4,7 +4,7 @@ import logging
 import signal
 import time
 import os
-from typing import Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from strategies.market_maker.gateways.mexc_ws import MexcWebsocketClient
 from strategies.market_maker.core.oracle import MultiSourceOracle
@@ -12,6 +12,7 @@ from strategies.market_maker.core.algo import AvellanedaStoikovModel, ASParams
 from strategies.market_maker.core.scanner import MarketScanner
 from strategies.market_maker.core.executor import HighFrequencyExecutor
 from strategies.market_maker.core.inventory_manager import InventoryManager
+from strategies.market_maker.core.config import EngineConfig
 from strategies.market_maker.core.precision import get_precision_helper
 from strategies.market_maker.core.order_monitor import OrderMonitor
 from strategies.market_maker.core.circuit_breaker import CircuitBreaker
@@ -46,11 +47,13 @@ class MarketMakerEngine:
         precision=None,
         circuit_breaker: CircuitBreaker | None = None,
         now_fn=None,
+        config: EngineConfig | None = None,
     ):
         self.symbols = symbols
         self.dry_run = dry_run
         self.running = False
         self._now = now_fn or time.time
+        self.config = config or EngineConfig.from_env()
         
         # 1. 组件初始化
         self.scanner = scanner or MarketScanner()
@@ -102,10 +105,12 @@ class MarketMakerEngine:
         
         # 6. 日志与回调
         self.suppress_logs = False
-        self.on_tick_callback = None
+        self.on_tick_callback: Optional[Callable[[Dict[str, Any]], None]] = None
         
         # 7. 订单跟踪（用于避免频繁撤单）
         self.last_orders: Dict[str, Dict] = {}  # {symbol: {'bid': price, 'ask': price}}
+        self._last_refresh_ts: Dict[str, float] = {}
+        self._last_warn_ts: Dict[str, float] = {}
         
         # 8. 精度处理工具
         self.precision = precision or get_precision_helper()
@@ -209,24 +214,21 @@ class MarketMakerEngine:
             bid: 买单价格
             ask: 卖单价格
         """
-        # 检查是否需要刷新
-        should_refresh = False
-        
-        if symbol in self.last_orders:
+        # 最小刷新节流：避免撤单风暴/限频
+        now = self._now()
+        last_refresh = self._last_refresh_ts.get(symbol, 0.0)
+        if now - last_refresh < self.config.min_refresh_interval_s:
+            return
+
+        # 检查是否需要刷新（价格变化超过阈值）
+        should_refresh = symbol not in self.last_orders
+        if not should_refresh:
             last_bid = self.last_orders[symbol]['bid']
             last_ask = self.last_orders[symbol]['ask']
-            
-            # 计算价格变化百分比
             bid_change = abs(bid - last_bid) / last_bid if last_bid > 0 else 1.0
             ask_change = abs(ask - last_ask) / last_ask if last_ask > 0 else 1.0
-            
-            # 默认阈值 0.02%，刷量模式可以更激进
-            threshold = float(os.getenv("MM_REFRESH_THRESHOLD", "0.0002"))
-            if bid_change > threshold or ask_change > threshold:
+            if bid_change > self.config.refresh_threshold or ask_change > self.config.refresh_threshold:
                 should_refresh = True
-        else:
-            # 首次下单
-            should_refresh = True
         
         if not should_refresh:
             return  # 不需要刷新
@@ -248,6 +250,7 @@ class MarketMakerEngine:
 
         # 4. 记录本次订单
         self.last_orders[symbol] = {'bid': bid, 'ask': ask}
+        self._last_refresh_ts[symbol] = now
             
     async def start(self):
         """启动引擎"""
@@ -375,33 +378,37 @@ class MarketMakerEngine:
         if self._tick_count[symbol] % 10 == 1:
             logger.debug(f"🔄 on_tick called for {symbol} (count: {self._tick_count[symbol]})")
         
-        # 1. 获取数据
-        # Oracle Price (Multi-Source)
-        oracle_data = self.oracle.get_price(symbol)
-        if not oracle_data:
-            if self._tick_count[symbol] <= 5:  # 只在前5次输出
-                logger.warning(f"⚠️ {symbol} Oracle 数据未就绪")
-            return  # 数据未就绪（Engine刚启动时）
-            
-        ref_price = oracle_data['mid']
-        oracle_age = self._now() - float(oracle_data.get("ts") or 0.0)
-        if oracle_age > 3.0:
-            logger.warning(f"⚠️ {symbol} Oracle 数据过旧: {oracle_age:.1f}s")
-            return
-        
-        # Mexc Local Orderbook
+        # 1) 取数：订单簿必须新鲜
         local_ob = self.mexc_ws.get_orderbook(symbol)
         if not local_ob:
-            if self._tick_count[symbol] <= 5:
-                logger.warning(f"⚠️ {symbol} MEXC订单簿数据未就绪")
+            self._warn_rate_limited(symbol, "mexc_ob", f"⚠️ {symbol} MEXC订单簿数据未就绪")
             return
         if not local_ob.get("bids") or not local_ob.get("asks"):
             return
 
         ob_age = self.mexc_ws.get_data_age(symbol)
-        if ob_age > 3.0:
-            logger.warning(f"⚠️ {symbol} MEXC 订单簿数据过旧: {ob_age:.1f}s")
+        if ob_age > self.config.ob_stale_s:
+            self._warn_rate_limited(symbol, "mexc_stale", f"⚠️ {symbol} MEXC 订单簿数据过旧: {ob_age:.1f}s")
             return
+
+        mexc_mid = (float(local_ob["bids"][0][0]) + float(local_ob["asks"][0][0])) / 2
+
+        # 2) 参考价：优先 Oracle，可按配置回退到 MEXC mid（默认只用于显示/不用于实盘）
+        ref_source = "oracle"
+        oracle_data = self.oracle.get_price(symbol)
+        if oracle_data:
+            oracle_age = self._now() - float(oracle_data.get("ts") or 0.0)
+            if oracle_age <= self.config.oracle_stale_s:
+                ref_price = float(oracle_data["mid"])
+            else:
+                oracle_data = None
+        if not oracle_data:
+            if self.config.ref_price_source in {"oracle_then_mexc", "mexc"}:
+                ref_source = "mexc"
+                ref_price = mexc_mid
+            else:
+                self._warn_rate_limited(symbol, "oracle", f"⚠️ {symbol} Oracle 数据未就绪/过旧")
+                return
         
         # 1.5 获取波动率和订单簿深度
         mexc_symbol = symbol.replace('/', '')
@@ -448,8 +455,7 @@ class MarketMakerEngine:
             if final_bid >= final_ask:
                 return
         
-        # 3.5 熔断器检查 (Circuit Breaker)
-        # 仅当数据源足够新鲜时才更新心跳（否则会掩盖断流）
+        # 3) 风控：仅当数据源足够新鲜时才更新心跳
         self.circuit_breaker.update_heartbeat()
         
         # 检查网络连接
@@ -490,16 +496,15 @@ class MarketMakerEngine:
         if mexc_bid > 0 and mexc_ask > 0:
             mexc_spread = (mexc_ask - mexc_bid) / ref_price * 100
 
-        # 6.5 “刷量/成交增强”门控：市场本身没有足够价差时不强行抢成交（避免负期望）
-        mode = os.getenv("MM_MODE", "profit").lower()  # profit | volume
-        min_market_spread = float(os.getenv("MM_MIN_MARKET_SPREAD_PCT", "0.01"))  # 默认要求市场价差>=0.01%
-        if mode == "volume" and mexc_spread < min_market_spread:
+        # 4) 可选刷量门控：市场价差不足直接不挂（避免无意义刷单/负期望）
+        if self.config.volume_mode_enabled and mexc_spread < self.config.min_market_spread_pct:
             return
         
         # 7. 上报状态 (Observer Pattern)
         stats = {
             'symbol': symbol,
             'ref_price': ref_price,
+            'ref_source': ref_source,
             'inventory': curr_inventory,
             'bid': final_bid,
             'ask': final_ask,
@@ -526,14 +531,25 @@ class MarketMakerEngine:
         
         # 8. 执行订单（实盘模式）
         if not self.dry_run:
-            # 刷量模式：抢队列（在不跨价的前提下向内一步），提升成交概率
-            if mode == "volume" and mexc_bid > 0 and mexc_ask > 0:
+            # 默认不允许在没有 Oracle 的情况下实盘交易（除非显式开启）
+            if ref_source != "oracle" and not self.config.allow_live_without_oracle:
+                return
+            # 可选：刷量模式抢队列（默认关闭，稳定优先）
+            if self.config.volume_mode_enabled and self.config.step_in_ticks > 0 and mexc_bid > 0 and mexc_ask > 0:
                 tick = self.precision.get_price_tick(symbol)
-                stepped_bid = self.precision.round_price(symbol, mexc_bid + tick)
-                stepped_ask = self.precision.round_price(symbol, mexc_ask - tick)
+                stepped_bid = self.precision.round_price(symbol, mexc_bid + tick * self.config.step_in_ticks)
+                stepped_ask = self.precision.round_price(symbol, mexc_ask - tick * self.config.step_in_ticks)
                 if stepped_bid < stepped_ask:
                     final_bid, final_ask = stepped_bid, stepped_ask
             await self.refresh_orders(symbol, final_bid, final_ask)
+
+    def _warn_rate_limited(self, symbol: str, key: str, msg: str):
+        now = self._now()
+        k = f"{symbol}:{key}"
+        last = self._last_warn_ts.get(k, 0.0)
+        if now - last >= self.config.warn_every_s:
+            logger.warning(msg)
+            self._last_warn_ts[k] = now
 
     async def on_order_filled(self, order: Dict):
         """订单成交回调处理"""

@@ -126,7 +126,7 @@ MIN_PROFIT_THRESHOLD=0.001    # 最小利润阈值（0.1%）
 - **`strategies/market_maker/core/executor.py`**: 高频订单执行器
 - **`strategies/market_maker/core/scanner.py`**: 币种安全筛选器
 - **`strategies/market_maker/gateways/mexc_ws.py`**: MEXC WebSocket + REST Polling
-- **`strategies/market_maker/gateways/binance_oracle.py`**: Binance 价格 Oracle
+- **`strategies/market_maker/core/oracle.py`**: 多源参考价 Oracle
 - **`strategies/market_maker/main.py`**: 策略引擎主逻辑
 - **`strategies/market_maker/dashboard.py`**: TUI 监控面板
 
@@ -204,7 +204,7 @@ XRP/USDT Bid: -1.23 Ask: 5.67 (异常价差)
 
 ## 📚 相关文档
 
-- [参数调优指南](strategies/market_maker/TUNING_GUIDE.md)
+（参数调优指南已移除，策略保持最小可用与稳定优先）
 
 ## 📄 License
 
