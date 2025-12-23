@@ -154,13 +154,18 @@ class MexcWebsocketClient:
                 ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 origin = "https://www.mexc.com"
                 
-                async with websockets.connect(
-                    self.WS_URL,
+                connect_kwargs = dict(
                     close_timeout=5,
                     ping_interval=15,
                     ping_timeout=10,
-                    extra_headers={"User-Agent": ua, "Origin": origin},
-                ) as ws:
+                )
+                headers = {"User-Agent": ua, "Origin": origin}
+                try:
+                    ws_cm = websockets.connect(self.WS_URL, **connect_kwargs, additional_headers=headers)
+                except TypeError:
+                    ws_cm = websockets.connect(self.WS_URL, **connect_kwargs, extra_headers=headers)
+
+                async with ws_cm as ws:
                     self.ws = ws
                     logger.info("✅ MEXC WebSocket Connected")
                     
