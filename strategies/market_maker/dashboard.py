@@ -9,8 +9,23 @@ from rich.table import Table
 from rich.text import Text
 from rich.console import Console
 from rich import box
+from rich.align import Align
 
 from strategies.market_maker.main import MarketMakerEngine
+import logging
+
+class DashboardLogHandler(logging.Handler):
+    """Custom handler to redirect logs to Dashboard deque"""
+    def __init__(self, log_deque):
+        super().__init__()
+        self.log_deque = log_deque
+        
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            self.log_deque.append(msg)
+        except Exception:
+            self.handleError(record)
 
 class MarketMakerDashboard:
     def __init__(self, symbols, dry_run=True):
@@ -18,228 +33,277 @@ class MarketMakerDashboard:
         self.engine = MarketMakerEngine(symbols, dry_run=dry_run)
         self.dry_run = dry_run
         
-        # 禁止引擎直接打印，改由 Dashboard 接管
+        # 禁止引擎直接打印，改由 Dashboard 接管 (But allow Logging)
         self.engine.suppress_logs = True
         self.engine.on_tick_callback = self.on_data_update
-        
-        # 数据缓存
-        self.history = deque(maxlen=20)  # 最近20条日志
-        self.balances = {'USDT': 0.0}  # 账户余额
-        self.last_balance_update = 0  # 上次更新时间
-        
-        self.market_data = {
-            sym: {
-                'price': 0.0, 
-                'bid': 0.0, 
-                'ask': 0.0, 
-                'spread': 0.0,
-                'inventory': 0.0,
-                'last_update': datetime.now()
-            } for sym in symbols
+
+        # 核心状态 (Thread-Safeish since we are using asyncio single thread)
+        self.state = {
+            'start_time': time.time(),
+            'initial_equity': None, # 初始总权益 (USDT + 持仓价值)
+            'current_equity': 0.0,
+            'usdt_balance': 0.0,
+            'positions': {}, # {symbol: {'amount': 0.0, 'value': 0.0, 'price': 0.0}}
+            'orders': [],    # Active orders
+            'market': {},    # {symbol: {'bid':..., 'ask':..., 'price':...}}
+            'logs': deque(maxlen=10)
         }
         
+        # 初始化市场数据结构
+        for sym in symbols:
+            self.state['market'][sym] = {'price': 0.0, 'spread': 0.0}
+            self.state['positions'][sym] = {'amount': 0.0, 'value': 0.0}
+
+        # Setup Logging redirection (requires self.state)
+        self._setup_logging()
+
+    def _setup_logging(self):
+        """Configure logging to output to self.state['logs']"""
+        # Remove existing handlers to avoid duplicates/spam
+        root_logger = logging.getLogger()
+        for h in root_logger.handlers[:]:
+            root_logger.removeHandler(h)
+            
+        # Add our custom handler
+        handler = DashboardLogHandler(self.state['logs'])
+        formatter = logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s', datefmt='%H:%M:%S')
+        handler.setFormatter(formatter)
+        root_logger.addHandler(handler)
+        root_logger.setLevel(logging.INFO)
+
     def on_data_update(self, data):
-        """引擎回调：接收实时数据"""
+        """引擎回调：接收实时价格数据 (极高频)"""
         sym = data['symbol']
-        self.market_data[sym] = {
+        details = self.state['market'].get(sym, {})
+        details.update({
             'price': data['ref_price'],
             'bid': data['bid'],
             'ask': data['ask'],
-            'spread': data['spread_pct'],
-            'inventory': data['inventory'],
-            'last_update': datetime.fromtimestamp(data['timestamp'])
-        }
+            'spread': data['spread_pct']
+        })
+        self.state['market'][sym] = details
         
-        # 添加到日志窗口
-        log_msg = f"[{datetime.now().strftime('%H:%M:%S')}] {sym:<8} Quote: {data['bid']:.4f} / {data['ask']:.4f} (Spr: {data['spread_pct']:.3f}%)"
-        self.history.append(log_msg)
+        # 记录关键日志 (可选)
+        # log_msg = f"[{datetime.now().strftime('%H:%M:%S')}] {sym} Quote: {data['bid']:.2f}/{data['ask']:.2f}"
+        # self.state['logs'].append(log_msg)
+        self.state['last_update'] = time.time()
 
-    def generate_table(self) -> Table:
-        """生成行情表格"""
-        table = Table(box=box.ROUNDED, expand=True)
-        table.add_column("Symbol", style="cyan", no_wrap=True)
-        table.add_column("Ref Price (Binance)", justify="right", style="green")
-        table.add_column("My Bid", justify="right", style="blue")
-        table.add_column("My Ask", justify="right", style="magenta")
-        table.add_column("Spread %", justify="right")
-        table.add_column("Inventory", justify="right", style="yellow")
-        table.add_column("Last Update", justify="center", style="dim")
-        
-        for sym in self.symbols:
-            d = self.market_data.get(sym, {})
-            if d['price'] > 0:
-                # 颜色高亮
-                spread_style = "red" if d['spread'] < 0 else "green"
+    async def fetch_background_data(self):
+        """后台循环：获取低频数据 (余额、订单)"""
+        while True:
+            try:
+                # 1. 获取余额 (可能耗时)
+                balances = await self.engine.fetch_account_balances()
+                self.state['usdt_balance'] = balances.get('USDT', 0.0)
                 
-                table.add_row(
-                    sym,
-                    f"${d['price']:.4f}",
-                    f"{d['bid']:.4f}",
-                    f"{d['ask']:.4f}",
-                    f"[{spread_style}]{d['spread']:.3f}%[/{spread_style}]",
-                    f"{d['inventory']:.2f}",
-                    d['last_update'].strftime('%H:%M:%S')
-                )
-            else:
-                table.add_row(sym, "-", "-", "-", "-", "-", "Waiting...")
+                # 更新持仓数量 (Dynamic for all assets)
+                # 1. Update existing symbols
+                for sym in self.symbols:
+                    coin = sym.split('/')[0]
+                    amt = balances.get(coin, 0.0)
+                    self.state['positions'][sym]['amount'] = amt
                 
-        return table
-    
-    def generate_balance_panel(self) -> Table:
-        """生成账户余额面板"""
-        table = Table(box=box.SIMPLE, show_header=True, expand=False)
-        table.add_column("Asset", style="cyan", width=10)
-        table.add_column("Balance", justify="right", style="yellow", width=15)
+                # 2. Add new assets found in balances
+                for coin, amt in balances.items():
+                    if coin == 'USDT': continue
+                    found = False
+                    for sym in self.symbols:
+                        if sym.startswith(f"{coin}/"):
+                            found = True
+                            break
+                    if not found and amt > 0:
+                        # Create a dummy symbol entry for display
+                        dummy_sym = f"{coin}/USDT" # Assumption
+                        if dummy_sym not in self.state['positions']:
+                            self.state['positions'][dummy_sym] = {'amount': amt, 'value': 0.0}
+                            self.state['market'][dummy_sym] = {'price': 0.0, 'spread': 0.0}
+                        else:
+                            self.state['positions'][dummy_sym]['amount'] = amt
+                
+                # 2. 获取订单 (从 Executor 内存获取，非 API)
+                if hasattr(self.engine, 'executor'):
+                    # 这里假设 active_orders 是一个字典
+                    # raw_orders = self.engine.executor.active_orders
+                    pass
+                    
+                # 3. 计算总权益 (Mark-to-Market)
+                # 3. 计算总权益 (Mark-to-Market)
+                total_equity = self.state['usdt_balance']
+                # Iterate all known positions
+                for sym, pos in self.state['positions'].items():
+                    price = self.state['market'].get(sym, {}).get('price', 0)
+                    amt = pos.get('amount', 0)
+                    
+                    if price > 0:
+                        val = amt * price
+                        self.state['positions'][sym]['value'] = val
+                        total_equity += val
+                
+                self.state['current_equity'] = total_equity
+                
+                # 如果是第一次获取，记录为初始权益
+                if self.state['initial_equity'] is None and total_equity > 0:
+                    self.state['initial_equity'] = total_equity
+                    self.state['logs'].append(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Initial Equity Snapshot: ${total_equity:.2f}")
+
+            except Exception as e:
+                self.state['logs'].append(f"[Error] Fetch Data: {str(e)}")
+            
+            await asyncio.sleep(2) # 2秒刷新一次
+
+    def generate_header(self) -> Panel:
+        """顶部 KPI 横幅"""
+        equity = self.state['current_equity']
+        initial = self.state['initial_equity'] or equity
         
-        # USDT 余额
-        usdt_bal = self.balances.get('USDT', 0.0)
-        table.add_row("USDT", f"{usdt_bal:.2f}")
+        pnl = equity - initial
+        pnl_pct = (pnl / initial * 100) if initial > 0 else 0.0
         
-        # 各币种余额
-        for sym in self.symbols:
+        color = "green" if pnl >= 0 else "red"
+        sign = "+" if pnl >= 0 else ""
+        
+        grid = Table.grid(expand=True)
+        grid.add_column(justify="center", ratio=1)
+        grid.add_column(justify="center", ratio=1)
+        grid.add_column(justify="center", ratio=1)
+        
+        # 1. Title
+        # 1. Title
+        mode = "🔴 LIVE" if not self.dry_run else "🟢 DRY-RUN"
+        
+        # Heartbeat
+        last_upd = self.state.get('last_update', 0)
+        hb_color = "green" if time.time() - last_upd < 5 else "red"
+        hb_text = datetime.fromtimestamp(last_upd).strftime('%H:%M:%S') if last_upd > 0 else "N/A"
+
+        grid.add_row(
+            f"[bold white]🚀 ZenithAlgo MM[/bold white] | {mode}",
+            f"[bold yellow]💰 Equity: ${equity:,.2f}[/bold yellow]",
+            f"[{color}]📈 PnL: {sign}${abs(pnl):.2f} ({sign}{pnl_pct:.2f}%)[/{color}] \n[dim]🕒 {hb_text}[/dim]"
+        )
+        
+        return Panel(grid, style="on blue")
+
+    def generate_portfolio_panel(self) -> Panel:
+        """持仓与资产表格"""
+        table = Table(box=box.SIMPLE_HEAD, expand=True)
+        table.add_column("Asset", style="cyan bold")
+        table.add_column("Holdings", justify="right")
+        table.add_column("Price ($)", justify="right")
+        table.add_column("Value ($)", justify="right", style="green")
+        
+        # USDT
+        usdt = self.state['usdt_balance']
+        table.add_row("USDT", f"{usdt:.4f}", "$1.00", f"${usdt:.2f}")
+        
+        # Cryptos
+        # Iterate over all positions we know about
+        for sym, pos in self.state['positions'].items():
             coin = sym.split('/')[0]
-            bal = self.balances.get(coin, 0.0)
-            if bal > 0.001:  # 只显示有余额的
-                table.add_row(coin, f"{bal:.4f}")
+            amt = pos.get('amount', 0)
+            price = self.state['market'].get(sym, {}).get('price', 0)
+            val = pos.get('value', 0)
+            
+            if amt > 0.0001: # 只显示有持仓的
+                table.add_row(
+                    coin, 
+                    f"{amt:.4f}", 
+                    f"{price:.2f}",
+                    f"${val:.2f}"
+                )
         
-        return table
-    
-    def generate_order_panel(self) -> Panel:
-        """生成订单状态面板"""
-        from rich.text import Text
-        
-        # 统计信息
-        total_orders = self.engine.executor.total_orders if hasattr(self.engine, 'executor') else 0
-        order_history = self.engine.executor.order_history if hasattr(self.engine, 'executor') else []
-        
-        # 构建显示文本
-        lines = []
-        lines.append(f"📊 Total Orders: {total_orders}")
-        lines.append(f"🟢 Active: 0")  # 当前未实现真实下单
-        lines.append("")
-        lines.append("📜 Recent Orders:")
-        
-        if order_history:
-            for order in list(order_history)[-5:]:  # 最近5笔
-                from datetime import datetime
-                time_str = datetime.fromtimestamp(order['time']).strftime('%H:%M:%S')
-                lines.append(f"  {time_str} {order['symbol']}")
-                lines.append(f"  B:{order['bid']:.2f} A:{order['ask']:.2f}")
-        else:
-            lines.append("  No orders yet")
-        
-        content = "\n".join(lines)
-        return Panel(
-            Text(content, style="white"),
-            title="📋 Orders",
-            border_style="green",
-            box=box.ROUNDED
-        )
+        return Panel(table, title="💼 Portfolio & Assets")
 
-    def generate_log_panel(self) -> Panel:
-        """生成日志面板"""
-        log_text = "\n".join(self.history)
-        return Panel(
-            Text(log_text, style="white"),
-            title="📜 Live Activity Log",
-            border_style="blue",
-            box=box.ROUNDED
+    def generate_market_mixed_panel(self) -> Panel:
+        """混合面板：上方行情，下方统计"""
+        # 上半部分：行情 Table
+        table = Table(box=box.SIMPLE_HEAD, expand=True)
+        table.add_column("Sym", style="bold white")
+        table.add_column("Price", justify="right", style="cyan")
+        table.add_column("Spread", justify="right", style="dim white")
+        
+        for sym in self.symbols:
+            m = self.state['market'][sym]
+            table.add_row(
+                sym.split('/')[0], 
+                f"{m.get('price',0):.2f}", 
+                f"{m.get('spread',0):.3f}%"
+            )
+
+        # 下半部分：最近订单
+        # 暂时只用文本列表
+        history = self.engine.executor.order_history if hasattr(self.engine, 'executor') else []
+        recent_orders = "\n".join([
+            f"[dim]{datetime.fromtimestamp(o['time']).strftime('%H:%M:%S')}[/dim] [bold]{o.get('symbol', 'UNKNOWN')}[/bold] {o['side'].upper()} {o['price']}" 
+            for o in list(history)[-5:] # Show last 5
+        ]) if history else "No active orders"
+
+        from rich.console import Group
+        group = Group(
+            table,
+            Text("\n📜 Recent Orders:", style="bold underline"),
+            Text(recent_orders)
         )
+        
+        return Panel(group, title="⚡ Activity")
+
+    def generate_logs_panel(self) -> Panel:
+        """日志"""
+        logs = list(self.state['logs'])
+        return Panel(Text("\n".join(logs), style="dim white"), title="📜 System Logs", box=box.SIMPLE)
 
     def make_layout(self) -> Layout:
-        """构建界面布局"""
         layout = Layout()
         layout.split_column(
-            Layout(name="header", size=3),
-            Layout(name="main", ratio=2),
-            Layout(name="footer", size=10)
+            Layout(name="header", size=4),
+            Layout(name="body", ratio=1),
+            Layout(name="footer", size=5)
+        )
+        layout["body"].split_row(
+            Layout(name="portfolio", ratio=6),
+            Layout(name="side", ratio=4)
         )
         
-        # 主体区域分左右两列
-        layout["main"].split_row(
-            Layout(name="market", ratio=3),
-            Layout(name="sidebar", ratio=1)
-        )
-        
-        # Header
-        mode_indicator = "🔴 LIVE MODE" if not self.dry_run else "🟢 DRY RUN"
-        layout["header"].update(
-            Panel(
-                Text(f"🚀 ZenithAlgo - MEXC Market Maker  |  {mode_indicator}", 
-                     justify="center", style="bold white"),
-                style="on blue"
-            )
-        )
-        
-        # 市场表格
-        layout["market"].update(
-            Panel(self.generate_table(), title="📊 Market Status")
-        )
-        
-        # 侧边栏分上下两部分
-        layout["sidebar"].split_column(
-            Layout(name="balance", ratio=1),
-            Layout(name="orders", ratio=1)
-        )
-        
-        # 余额面板
-        layout["balance"].update(
-            Panel(self.generate_balance_panel(), title="💰 Account")
-        )
-        
-        # 订单面板
-        layout["orders"].update(
-            self.generate_order_panel()
-        )
-        
-        # Footer (Logs)
-        layout["footer"].update(self.generate_log_panel())
-        
+        layout["header"].update(self.generate_header())
+        layout["portfolio"].update(self.generate_portfolio_panel())
+        layout["side"].update(self.generate_market_mixed_panel())
+        layout["footer"].update(self.generate_logs_panel())
         return layout
 
     async def run(self):
-        """运行即时面板"""
-        # 1. 启动引擎 (后台任务)
+        """主入口"""
+        # 1. 启动交易引擎
         engine_task = asyncio.create_task(self.engine.start())
         
-        # 2. 启动 UI 循环
+        # 2. 启动数据后台 (独立循环)
+        bg_task = asyncio.create_task(self.fetch_background_data())
+        
+        # 3. 启动 UI (主循环) - 纯渲染，不await API
         try:
             with Live(self.make_layout(), refresh_per_second=4, screen=True) as live:
-                loop_count = 0
                 while True:
-                    # 每 10 秒更新一次余额（避免频繁调用 API）
-                    if loop_count % 40 == 0:  # 优化：20 -> 40 (10秒)
-                        try:
-                            self.balances = await self.engine.fetch_account_balances()
-                        except Exception as e:
-                            pass  # 静默失败，使用旧数据
-                    
                     live.update(self.make_layout())
-                    await asyncio.sleep(0.25)
-                    loop_count += 1
+                    await asyncio.sleep(0.2) # 200ms 刷新率
                     
-                    # 如果引擎挂了，退出
                     if engine_task.done():
                         break
         except KeyboardInterrupt:
             pass
         finally:
             self.engine.running = False
-            # Ensure engine task is cancelled if it's still running
+            bg_task.cancel()
             if not engine_task.done():
                 engine_task.cancel()
-            
             try:
                 await engine_task
-            except asyncio.CancelledError:
+            except:
                 pass
 
-# ===== 启动入口 =====
+# ===== 启动入口 (保持不变) =====
 if __name__ == "__main__":
     import argparse
     from strategies.market_maker.core.scanner import MarketScanner
     
-    # 强制预加载环境变量 (在所有逻辑之前)
     import os
     from dotenv import load_dotenv
     env_path = os.path.abspath("config/.env")
@@ -249,6 +313,8 @@ if __name__ == "__main__":
     parser.add_argument('--live', action='store_true', help='⚠️ 开启实盘交易 (LIVE TRADING)')
     parser.add_argument('--auto-discover', action='store_true', help='自动发现新币种')
     parser.add_argument('--limit', type=int, default=5, help='显示数量限制')
+    parser.add_argument('--discover-mode', type=str, default='low_risk', choices=['low_risk', 'high_spread'], help='选币模式：低风险/高价差')
+    parser.add_argument('--symbol', type=str, help='指定交易对，如 SOL/USDT')
     args = parser.parse_args()
     
     if args.live:
@@ -256,18 +322,16 @@ if __name__ == "__main__":
         print("🚨🚨🚨 DANGER: LIVE TRADING MODE ENABLED 🚨🚨🚨")
         print("Make sure you have MEXC_API_KEY set in .env")
         print("="*50 + "\n")
-        time.sleep(3)
+        time.sleep(2)
     
-    if args.auto_discover:
-        print("🔍 Scanning for safe opportunities...")
-        # 只选择价格 > $10 的主流大盘币（AS 模型更稳定）
-        potential = [
-            'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT',
-            'XRP/USDT', 'AVAX/USDT', 'LINK/USDT', 'LTC/USDT', 'UNI/USDT'
-        ]
+    # 优先使用指定的symbol
+    if args.symbol:
+        targets = [args.symbol]
+    elif args.auto_discover:
+        potential = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT',
+            'XRP/USDT', 'AVAX/USDT', 'LINK/USDT', 'LTC/USDT', 'UNI/USDT']
         scanner = MarketScanner()
-        targets = scanner.scan_opportunities(potential)[:args.limit]
-        print(f"✅ Auto-selected: {targets}")
+        targets = scanner.scan(potential, mode=args.discover_mode, limit=args.limit)
     else:
         targets = ['ETH/USDT', 'SOL/USDT', 'PEPE/USDT']
         

@@ -1,6 +1,7 @@
 import ccxt.async_support as ccxt
 import asyncio
 import logging
+import time
 from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,7 @@ class MultiSourceOracle:
                         'mid': mid_price,
                         'bid': ticker['bid'],
                         'ask': ticker['ask'],
-                        'ts': asyncio.get_event_loop().time()
+                        'ts': time.time()
                     }
                     
                 # 1秒更新一次

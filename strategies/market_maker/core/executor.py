@@ -17,8 +17,9 @@ class HighFrequencyExecutor:
     4. 自动处理精度 (Precision)
     """
     
-    def __init__(self, dry_run: bool = True):
+    def __init__(self, dry_run: bool = True, order_monitor=None):
         self.dry_run = dry_run
+        self.order_monitor = order_monitor  # 订单监控器
         
         # 使用 ccxt 连接 MEXC
         # 注意: 实际 key 需从 env 读取
@@ -129,8 +130,30 @@ class HighFrequencyExecutor:
                     logger.error(f"❌ Order failed: {res}")
                     self.error_count += 1
                 else:
-                    new_orders.append(res['id'])
+                    order_id = res['id']
+                    new_orders.append(order_id)
                     # logger.info(f"✅ Order placed: {res['side']} @ {res['price']}")
+                    
+                    # 注册订单到监控器
+                    if self.order_monitor:
+                        self.order_monitor.register_order(
+                            order_id=order_id,
+                            symbol=symbol,
+                            side=res['side'],
+                            price=res['price'],
+                            amount=res['amount']
+                        )
+                    
+                    # 更新统计
+                    self.total_orders += 1
+                    self.order_history.append({
+                        'time': time.time(),
+                        'symbol': symbol,
+                        'side': res['side'],
+                        'price': res['price'],
+                        'bid': bid_price, # 记录当时的报价
+                        'ask': ask_price
+                    })
             
             self.active_orders[symbol] = new_orders
             
@@ -145,3 +168,13 @@ class HighFrequencyExecutor:
             logger.critical("🚨 TRADING HALTED: Too many errors!")
             return False
         return True
+    
+    async def close(self):
+        """关闭并释放资源"""
+        # 在 dry_run 模式下,exchange 可能没有打开的连接
+        if not self.dry_run and hasattr(self.exchange, 'close'):
+            try:
+                await self.exchange.close()
+                logger.info("✅ Executor closed successfully")
+            except Exception as e:
+                logger.warning(f"⚠️ Error closing executor: {e}")

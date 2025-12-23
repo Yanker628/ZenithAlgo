@@ -27,6 +27,7 @@ class MexcWebsocketClient:
         self.symbols = [s.replace('/', '') for s in symbols] # 格式化为符号 (e.g. BTCUSDT)
         self.running = False
         self.ws = None
+        self._data_event = asyncio.Event()
         
         # 数据缓存
         self.orderbooks: Dict[str, Dict] = {}  # {symbol: {'bids': [], 'asks': [], 'ts': 0}}
@@ -63,16 +64,49 @@ class MexcWebsocketClient:
             logger.info(f"📡 Subscribed to {symbol}")
         
     async def connect(self):
-        """建立连接 (优先 WS，失败则自动切换 REST Polling)"""
+        """建立连接 (WebSocket 优先，REST Polling 作为 fallback)"""
         self.running = True
-        
-        # 尝试启动 WS 连接
+
         ws_task = asyncio.create_task(self._ws_connect_loop())
-        
-        # 同时启动 REST Polling (作为保底，或者 WS Blocked 时的主力)
-        rest_task = asyncio.create_task(self._rest_polling_loop())
-        
-        await asyncio.gather(ws_task, rest_task)
+        rest_task = None
+
+        try:
+            # 给 WS 一个短窗口抢先提供数据；若无数据则启动 REST fallback
+            try:
+                await asyncio.wait_for(self._data_event.wait(), timeout=3.0)
+                logger.info("✅ Using WebSocket as primary market data source")
+            except asyncio.TimeoutError:
+                logger.warning("⚠️ WS not ready in 3s, starting REST polling fallback")
+                rest_task = asyncio.create_task(self._rest_polling_loop())
+
+            while self.running:
+                if ws_task.done():
+                    if rest_task is None:
+                        logger.warning("⚠️ WS stopped, switching to REST polling fallback")
+                        rest_task = asyncio.create_task(self._rest_polling_loop())
+                    await rest_task
+                    break
+
+                if rest_task is not None and rest_task.done():
+                    break
+
+                await asyncio.sleep(0.5)
+
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if rest_task is not None and not rest_task.done():
+                rest_task.cancel()
+                try:
+                    await rest_task
+                except asyncio.CancelledError:
+                    pass
+            if not ws_task.done():
+                ws_task.cancel()
+                try:
+                    await ws_task
+                except asyncio.CancelledError:
+                    pass
 
     async def _ws_connect_loop(self):
         """WebSocket 连接循环"""
@@ -116,28 +150,59 @@ class MexcWebsocketClient:
             logger.info("⚠️ WebSocket 连接失败，完全依赖 REST Polling")
 
     async def _rest_polling_loop(self):
-        """REST API 轮询循环 (Fallback)"""
+        """REST API 轮询循环（核心数据源）"""
         import ccxt.async_support as ccxt
         
-        logger.info("🔄 Starting REST Polling Fallback...")
-        exchange = ccxt.mexc()
+        # 启动延迟，确保对象初始化完成
+        await asyncio.sleep(0.5)
+        
+        logger.info("🔄 Starting REST Polling...")
+        exchange = ccxt.mexc({
+            'enableRateLimit': True,
+            'timeout': 10000,  # 10秒超时
+        })
+        
+        iteration = 0
         
         try:
+            logger.info(f"📊 REST Polling ready for symbols: {self.symbols}")
+            
             while self.running:
+                iteration += 1
+                
+                # 定期输出心跳日志
+                if iteration % 10 == 1:
+                    logger.info(f"🔁 REST Polling iteration #{iteration}")
+                
                 try:
                     for symbol in self.symbols:
-                        # 还原格式 ETHUSDT -> ETH/USDT
-                        ccxt_symbol = f"{symbol[:-4]}/{symbol[-4:]}" # 简单假设 USDT 结尾
+                        # 检查运行状态
+                        if not self.running:
+                            break
                         
-                        # 1. Fetch Orderbook
+                        # 符号转换: ETHUSDT -> ETH/USDT
+                        if symbol.endswith('USDT'):
+                            base = symbol[:-4]
+                            ccxt_symbol = f"{base}/USDT"
+                        else:
+                            logger.warning(f"⚠️ 不支持的符号格式: {symbol}")
+                            continue
+                        
+                        # 获取订单簿
                         ob = await exchange.fetch_order_book(ccxt_symbol, limit=5)
                         self.orderbooks[symbol] = {
-                            'bids': ob['bids'],
-                            'asks': ob['asks'],
+                            'bids': ob['bids'][:5],
+                            'asks': ob['asks'][:5],
                             'ts': time.time()
                         }
+                        if not self._data_event.is_set():
+                            self._data_event.set()
                         
-                        # 2. 记录价格历史（用于动态价差）
+                        # 首次成功输出确认
+                        if iteration == 1:
+                            logger.info(f"✅ {symbol} orderbook ready: bid={ob['bids'][0][0]}, ask={ob['asks'][0][0]}")
+                        
+                        # 更新价格历史（用于波动率计算）
                         if ob['bids'] and ob['asks']:
                             mid_price = (ob['bids'][0][0] + ob['asks'][0][0]) / 2
                             self.price_history[symbol].append({
@@ -146,19 +211,35 @@ class MexcWebsocketClient:
                             })
                             self.last_mid_price[symbol] = mid_price
                         
-                        # 3. Fetch Trades
-                        trades = await exchange.fetch_trades(ccxt_symbol, limit=20)
-                        self._process_rest_trades(symbol, trades)
-                        
-                    await asyncio.sleep(1) # 优化：2秒 -> 1秒
+                        # 获取成交数据（非关键，失败不影响）
+                        try:
+                            trades = await exchange.fetch_trades(ccxt_symbol, limit=20)
+                            self._process_rest_trades(symbol, trades)
+                        except Exception:
+                            pass  # 成交数据不是必须的
                     
+                    # 每秒更新一次
+                    await asyncio.sleep(1)
+                    
+                except asyncio.CancelledError:
+                    # 正常取消，向上传播
+                    raise
                 except Exception as e:
-                    logger.error(f"❌ REST Polling Error: {e}")
-                    await asyncio.sleep(5)
+                    # 单次迭代错误，记录后继续
+                    logger.error(f"❌ REST Polling iteration error: {e}")
+                    await asyncio.sleep(5)  # 错误后等待5秒再重试
+                    
+        except asyncio.CancelledError:
+            logger.info("🛑 REST Polling cancelled")
+        except Exception as e:
+            logger.error(f"❌ REST Polling fatal error: {e}")
         finally:
-            # 确保资源被释放
-            await exchange.close()
-            logger.info("🔒 REST Polling stopped and resources released")
+            # 确保资源释放
+            try:
+                await exchange.close()
+                logger.info("🔒 REST Polling stopped and resources released")
+            except Exception as e:
+                logger.error(f"⚠️ Error closing exchange: {e}")
 
     def _process_rest_trades(self, symbol, trades):
         """处理 REST 返回的成交数据"""
@@ -215,6 +296,8 @@ class MexcWebsocketClient:
             'asks': asks,
             'ts': time.time()
         }
+        if not self._data_event.is_set():
+            self._data_event.set()
         
         # 触发回调 (如果需要)
         # if self.on_depth_update:
@@ -256,53 +339,26 @@ class MexcWebsocketClient:
         """获取最近成交"""
         clean_sym = symbol.replace('/', '')
         return self.trades.get(clean_sym, [])
-
-
-# ===== 测试代码 =====
-if __name__ == "__main__":
-    # 配置日志
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     
-    async def main():
-        client = MexcWebsocketClient(['ETH/USDT'])
+    def is_data_ready(self) -> bool:
+        """检查是否有可用数据"""
+        return len(self.orderbooks) > 0
+    
+    def get_data_age(self, symbol: str) -> float:
+        """
+        获取数据年龄（秒）
         
-        # 启动连接任务
-        task = asyncio.create_task(client.connect())
-        
-        # 模拟运行10秒
-        print("⏳ Connecting to MEXC WS...")
-        await asyncio.sleep(5)
-        
-        # 打印一次数据
-        ob = client.get_orderbook('ETH/USDT')
+        Returns:
+            数据年龄，如果无数据返回无穷大
+        """
+        clean_sym = symbol.replace('/', '')
+        ob = self.orderbooks.get(clean_sym)
         if ob:
-            print(f"\n📊 ETH/USDT Orderbook:")
-            print(f"   Bid1: {ob['bids'][0][0]} (Qty: {ob['bids'][0][1]})")
-            print(f"   Ask1: {ob['asks'][0][0]} (Qty: {ob['asks'][0][1]})")
-        else:
-            print("\n⚠️ No Orderbook data yet")
-            
-        # 停止
-        client.running = False
-        await task
-
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
-    def _process_rest_trades(self, symbol, trades):
-        """处理 REST 返回的成交数据"""
-        if not trades:
-            return
-            
-        self.trades[symbol] = {
-            'price': trades[-1]['price'],
-            'side': trades[-1]['side'],
-            'ts': trades[-1]['timestamp']
-        }
+            return time.time() - ob['ts']
+        return float('inf')
     
     def calculate_volatility(self, symbol: str) -> float:
-        """计算实时波动率（基于本地价格历史，零延迟）"""
+        """计算实时波动率（基于本地价格历史,零延迟）"""
         history = self.price_history.get(symbol, [])
         
         if len(history) < 10:
@@ -322,3 +378,47 @@ if __name__ == "__main__":
         volatility_pct = volatility * 100  # 转为百分比
         
         return max(0.001, min(volatility_pct, 0.05))  # 限制在 0.001% - 0.05%
+
+
+# ===== 测试代码 =====
+if __name__ == "__main__":
+    # 配置日志
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    
+    async def main():
+        client = MexcWebsocketClient(['ETH/USDT'])
+        
+        # 启动连接任务
+        task = asyncio.create_task(client.connect())
+        
+        # 模拟运行10秒
+        print("⏳ Connecting to MEXC WS...")
+        await asyncio.sleep(3)
+        
+        # 第一次检查
+        ob = client.get_orderbook('ETH/USDT')
+        if ob:
+            print(f"\n📊 ETH/USDT Orderbook (3s):") 
+            print(f"   Bid1: {ob['bids'][0][0]} (Qty: {ob['bids'][0][1]})")
+            print(f"   Ask1: {ob['asks'][0][0]} (Qty: {ob['asks'][0][1]})")
+        else:
+            print("\n⚠️ No Orderbook data yet (3s), waiting...")
+            
+            # 再等5秒
+            await asyncio.sleep(5)
+            ob = client.get_orderbook('ETH/USDT')
+            if ob:
+                print(f"\n📊 ETH/USDT Orderbook (8s):")
+                print(f"   Bid1: {ob['bids'][0][0]} (Qty: {ob['bids'][0][1]})")
+                print(f"   Ask1: {ob['asks'][0][0]} (Qty: {ob['asks'][0][1]})")
+            else:
+                print("\n❌ Still no Orderbook data after 8s")
+            
+        # 停止
+        client.running = False
+        await task
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

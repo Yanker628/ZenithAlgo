@@ -119,16 +119,105 @@ class MarketScanner:
             return {'is_safe': False, 'risk_level': 'UNKNOWN', 'reason': str(e)}
 
     def scan_opportunities(self, target_symbols: List[str]) -> List[str]:
-        """扫描列表并返回安全的标的"""
-        safe_list = []
+        """扫描列表并返回安全的标的（默认低风险）"""
+        return self.scan(target_symbols, mode="low_risk")
+
+    def scan(
+        self,
+        target_symbols: List[str],
+        *,
+        mode: str = "low_risk",
+        limit: Optional[int] = None,
+        min_depth_qty: float = 50.0,
+        min_spread_pct: float = 0.005,
+        max_spread_pct: float = 0.5,
+    ) -> List[str]:
+        """
+        mode:
+          - low_risk: 只返回 LOW 风险
+          - high_spread: 在“安全白名单”内按价差/深度打分，优先挑价差更大且深度足够的币（适合刷量/捕捉更宽点差）
+        """
+        if mode == "high_spread":
+            ranked = self.rank_by_spread(
+                target_symbols,
+                min_depth_qty=min_depth_qty,
+                min_spread_pct=min_spread_pct,
+                max_spread_pct=max_spread_pct,
+            )
+            symbols = [s for s, _ in ranked]
+            return symbols[:limit] if limit else symbols
+
+        safe_list: List[str] = []
         for sym in target_symbols:
             result = self.analyze_symbol(sym)
             logger.info(f"🔍 Analyzing {sym}: {result['risk_level']} - {result['reason']}")
-            
             if result['risk_level'] == 'LOW':
                 safe_list.append(sym)
-                
-        return safe_list
+        return safe_list[:limit] if limit else safe_list
+
+    def rank_by_spread(
+        self,
+        target_symbols: List[str],
+        *,
+        min_depth_qty: float = 50.0,
+        min_spread_pct: float = 0.005,
+        max_spread_pct: float = 0.5,
+    ) -> List[tuple[str, dict]]:
+        """
+        返回按“可做市价差”排序的标的列表（先做白名单校验，再按价差与深度筛选）。
+        score = spread_pct * depth_score，其中 depth_score 由前5档均值深度归一化。
+        """
+        if not self.safe_symbols_cache:
+            self.refresh_markets()
+
+        results: List[tuple[str, dict]] = []
+        for sym in target_symbols:
+            # 白名单校验（避免挑到极端操纵盘）
+            target = sym.replace('/', '').upper()
+            listed = any(s.replace('/', '').upper() == target for s in self.safe_symbols_cache)
+            if not listed:
+                continue
+
+            try:
+                ob = self.mexc.fetch_order_book(sym, limit=5)
+                bids = ob.get("bids") or []
+                asks = ob.get("asks") or []
+                if not bids or not asks:
+                    continue
+                bid = float(bids[0][0])
+                ask = float(asks[0][0])
+                if bid <= 0 or ask <= 0 or ask <= bid:
+                    continue
+
+                spread_pct = (ask - bid) / bid * 100.0
+                if spread_pct < min_spread_pct or spread_pct > max_spread_pct:
+                    continue
+
+                bid_depth = sum(float(x[1]) for x in bids[:5])
+                ask_depth = sum(float(x[1]) for x in asks[:5])
+                depth_qty = (bid_depth + ask_depth) / 2.0
+                if depth_qty < min_depth_qty:
+                    continue
+
+                depth_score = max(0.5, min(2.0, depth_qty / 100.0))
+                score = spread_pct * depth_score
+                results.append(
+                    (
+                        sym,
+                        {
+                            "score": score,
+                            "spread_pct": spread_pct,
+                            "depth_qty": depth_qty,
+                            "bid": bid,
+                            "ask": ask,
+                        },
+                    )
+                )
+            except Exception:
+                continue
+
+        results.sort(key=lambda x: x[1]["score"], reverse=True)
+        return results
 
 
 # ===== 测试代码 =====
